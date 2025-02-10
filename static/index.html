@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Internal LLM</title>
+  <link rel="icon" href="/favicon.ico" type="image/x-icon" />
+  <style>
+    /* Basic styling */
+    body {
+      background-color: #121212;
+      color: #e0e0e0;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      margin: 0;
+      padding: 0;
+    }
+    .container {
+      max-width: 80%;
+      margin: 40px auto;
+      padding: 20px;
+    }
+    .chat-window {
+      background-color: #1e1e1e;
+      border-radius: 8px;
+      padding: 20px;
+      height: 70vh; /* height to 70% of the viewport height */
+      overflow-y: auto;
+      margin-bottom: 20px;
+    }
+    .chat-message {
+      margin-bottom: 10px;
+      padding: 8px 12px;
+      border-radius: 4px;
+      max-width: 70%;
+      word-wrap: break-word;
+    }
+    .chat-message.user {
+      background-color: #007acc;
+      color: #fff;
+      margin-left: auto;
+      text-align: right;
+    }
+    .chat-message.bot {
+      background-color: #333;
+      color: #fff;
+      margin-right: auto;
+      text-align: left;
+    }
+    .input-section {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .model-select-container {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    select {
+      background-color: #1e1e1e;
+      color: #e0e0e0;
+      border-radius: 4px;
+      border: 1px solid #555;
+      padding: 8px;
+    }
+    textarea {
+      flex: 1;
+      resize: vertical;
+      min-height: 60px;
+      max-height: 200px;
+      padding: 10px;
+      border: none;
+      border-radius: 4px;
+      font-size: 1rem;
+      background-color: #1e1e1e;
+      color: #e0e0e0;
+    }
+    button {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 4px;
+      background-color: #007acc;
+      color: #fff;
+      cursor: pointer;
+      font-size: 1rem;
+      white-space: nowrap;
+    }
+    button:hover {
+      background-color: #005f99;
+    }
+
+    /* THINKING BLOCK */
+    .bot-think {
+      background-color: #2c2c2c;
+      color: #bbb;
+      border-left: 3px solid #555;
+      padding: 8px 12px;
+      margin: 10px 0;
+      border-radius: 4px;
+    }
+    .thinking-indicator {
+      font-style: italic;
+      animation: flashing 1s infinite;
+      cursor: pointer;
+    }
+    @keyframes flashing {
+      0% { opacity: 1; }
+      50% { opacity: 0.5; }
+      100% { opacity: 1; }
+    }
+    .think-content {
+      margin-top: 5px;
+      font-size: 0.9rem;
+      color: #888;
+      display: none; /* default hidden */
+      white-space: pre-wrap;
+    }
+
+    /* CODE BLOCK */
+    .code-block {
+      background-color: #282c34;
+      padding: 15px;
+      border-radius: 8px;
+      margin: 10px 0;
+      font-family: monospace;
+      max-height: 400px;  /* Set a max-height for scrolling */
+      overflow-y: auto;   /* Enable vertical scrolling */
+      position: relative;
+    }
+    .code-block pre {
+      margin: 0;
+      padding-top: 50px;  /* Add top padding for the copy button */
+      white-space: pre-wrap; /* Wrap lines */
+      word-wrap: break-word;
+    }
+    .copy-button {
+      position: sticky;
+      top: 0;  /* Stick to the top of the code block */
+      float: right;
+      padding: 5px 10px;
+      background-color: #61dafb;
+      border: none;
+      cursor: pointer;
+      color: #282c34;
+      border-radius: 4px;
+      margin: 5px;
+      z-index: 1;  /* Ensure it stays above the code */
+    }
+    .copy-button:hover {
+      background-color: #4fb0e6;
+    }
+    code {
+      background-color: #2c2c2c;
+      padding: 2px 4px;
+      border-radius: 4px;
+      font-family: monospace;
+      color: #fff;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Internal LLM Chat</h1>
+    <div class="chat-window" id="chat-window"></div>
+
+    <div class="input-section">
+      <div class="model-select-container">
+        <label for="model-select">Choose Model:</label>
+        <select id="model-select">
+          <!-- Default OpenAI models -->
+          <option value="o3-mini">OpenAI o3-mini</option>
+          <option value="o1-preview">OpenAI o1-preview</option>
+          <!-- o1 regular is not listed because it does not support streaming -->
+          <option value="gpt-4o">OpenAI GPT-4o</option>
+          <option value="gpt-4o-mini">OpenAI GPT-4o-mini</option>
+          <!-- Ollama models will be appended here dynamically -->
+        </select>
+      </div>
+      <div style="display:flex; gap: 10px;">
+        <textarea id="user-input" placeholder="Type here (Shift+Enter for new line)..."></textarea>
+        <button id="send-button">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // -----------------------------------------------------
+    // GLOBALS & PARSER STATE
+    // -----------------------------------------------------
+    const chatWindow = document.getElementById('chat-window');
+    const userInput = document.getElementById('user-input');
+    const sendButton = document.getElementById('send-button');
+    const modelSelect = document.getElementById('model-select');
+
+    let conversation = [];
+
+    // Leftover lines
+    let leftoverLine = "";
+    let currentBotMessageContainer = null;
+    let currentPartialTextElement = null;
+
+    let inCodeBlock = false;
+    let currentCodeElement = null;
+    let codeLines = [];
+
+    // THINKING BLOCKS
+    let thinkBlocks = [];
+    let currentThinkBlock = null; // The block we're actively appending to
+
+    // We treat lines of 20+ dashes as alternate code fences
+    const dashedLineRegex = /^-{20,}$/;
+
+    // -----------------------------------------------------
+    // FETCH MODELS AND POPULATE SELECT
+    // -----------------------------------------------------
+    async function fetchAndPopulateModels() {
+      try {
+        const response = await fetch('/ollama-models');
+        if (!response.ok) {
+          console.error('Failed to fetch models:', response.statusText);
+          return;
+        }
+        const data = await response.json();
+        if (data.models && Array.isArray(data.models)) {
+          // Remove existing Ollama models from the select (if any)
+          const ollamaModelOptions = modelSelect.querySelectorAll('option[data-source="ollama"]');
+          ollamaModelOptions.forEach(option => option.remove());
+
+          data.models.forEach(model => {
+            const option = document.createElement('option');
+            option.value = model.NAME;
+            option.textContent = model.NAME;
+            option.setAttribute('data-source', 'ollama'); // Mark as Ollama model
+            modelSelect.appendChild(option);
+          });
+        } else {
+          console.error('Invalid models data:', data);
+        }
+      } catch (error) {
+        console.error('Error fetching models:', error);
+      }
+    }
+
+    // Fetch models on page load
+    fetchAndPopulateModels();
+
+    // -----------------------------------------------------
+    // HELPER FUNCTIONS
+    // -----------------------------------------------------
+
+    function scrollChatToBottom() {
+      // Always scroll to bottom
+      chatWindow.scrollTop = chatWindow.scrollHeight;
+    }
+
+    function scrollChatToBottomIfNeeded() {
+      const tolerance = 50; // pixels
+      const isNearBottom = chatWindow.scrollHeight - chatWindow.scrollTop - chatWindow.clientHeight <= tolerance;
+      if (isNearBottom) {
+        chatWindow.scrollTop = chatWindow.scrollHeight;
+      }
+    }
+
+    function escapeHTML(str) {
+      return str
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    function formatTextWithMarkup(rawText) {
+      let text = escapeHTML(rawText);
+      // Convert **bold** to <strong>
+      text = text.replace(/\*\*(.+?)\*\*/g, (_, p1) => `<strong>${p1}</strong>`);
+      // Convert `inline code`
+      text = text.replace(/`([^`]+)`/g, (_, p1) => `<code>${p1}</code>`);
+      return text;
+    }
+
+    function appendMessage(sender, content) {
+      const msg = document.createElement('div');
+      msg.classList.add('chat-message', sender);
+      msg.textContent = content;
+      chatWindow.appendChild(msg);
+      scrollChatToBottomIfNeeded();
+      return msg;
+    }
+
+    function createBotMessageContainer() {
+      const msgDiv = document.createElement('div');
+      msgDiv.classList.add('chat-message', 'bot');
+      chatWindow.appendChild(msgDiv);
+      scrollChatToBottom();
+      currentPartialTextElement = null;
+      return msgDiv;
+    }
+
+    function appendNormalText(container, text) {
+      const el = document.createElement('div');
+      el.innerHTML = formatTextWithMarkup(text);
+      container.appendChild(el);
+      currentPartialTextElement = el;
+      scrollChatToBottomIfNeeded();
+    }
+
+    function updatePartialText(container, text) {
+      if (currentPartialTextElement) {
+        currentPartialTextElement.innerHTML = formatTextWithMarkup(text);
+      } else {
+        appendNormalText(container, text);
+      }
+      scrollChatToBottomIfNeeded();
+    }
+
+    // -----------------------------------------------------
+    // THINKING BLOCK FUNCTIONS
+    // -----------------------------------------------------
+    function startThinkBlock(container) {
+      const wrap = document.createElement('div');
+      wrap.classList.add('bot-think');
+
+      const indicator = document.createElement('div');
+      indicator.classList.add('thinking-indicator');
+      indicator.textContent = 'Thinking...';
+
+      const contentDiv = document.createElement('div');
+      contentDiv.classList.add('think-content');
+      contentDiv.style.display = 'none';
+
+      // Toggle the display for THIS think block only.
+      indicator.addEventListener('click', () => {
+        if (contentDiv.style.display === 'none') {
+          contentDiv.style.display = 'block';
+          indicator.textContent = 'Hide thinking';
+        } else {
+          contentDiv.style.display = 'none';
+          indicator.textContent = 'Thinking...';
+        }
+      });
+
+      wrap.appendChild(indicator);
+      wrap.appendChild(contentDiv);
+      container.appendChild(wrap);
+      scrollChatToBottomIfNeeded();
+
+      // Create a new think block object and save it in the global array.
+      const block = {
+        indicator: indicator,
+        contentDiv: contentDiv,
+      };
+      thinkBlocks.push(block);
+      // Set this as the current active think block.
+      currentThinkBlock = block;
+    }
+
+    function appendThinkText(text) {
+      if (!currentThinkBlock) return;
+      currentThinkBlock.contentDiv.innerHTML += escapeHTML(text);
+      scrollChatToBottomIfNeeded();
+    }
+
+    function endThinkBlock() {
+      currentThinkBlock = null;
+      inThinkBlock = false;
+    }
+
+    // -----------------------------------------------------
+    // CODE BLOCK FUNCTIONS
+    // -----------------------------------------------------
+    function startCodeBlock(container) {
+      const codeBlockDiv = document.createElement('div');
+      codeBlockDiv.classList.add('code-block');
+
+      const copyBtn = document.createElement('button');
+      copyBtn.classList.add('copy-button');
+      copyBtn.textContent = 'Copy';
+      copyBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText(codeEl.innerText)
+          .then(() => {
+            const oldText = copyBtn.textContent;
+            copyBtn.textContent = 'Copied!';
+            setTimeout(() => {
+              copyBtn.textContent = oldText;
+            }, 1500);
+          })
+          .catch(err => console.error('Clipboard error:', err));
+      });
+
+      const preEl = document.createElement('pre');
+      const codeEl = document.createElement('code');
+
+      preEl.appendChild(codeEl);
+      codeBlockDiv.appendChild(copyBtn);
+      codeBlockDiv.appendChild(preEl);
+
+      container.appendChild(codeBlockDiv);
+
+      codeLines = [];
+      currentCodeElement = codeEl;
+      scrollChatToBottomIfNeeded();
+    }
+
+    function appendCodeLine(line) {
+      codeLines.push(line);
+      // Show it immediately in the code block
+      if (currentCodeElement) {
+        currentCodeElement.appendChild(document.createTextNode(line + "\n"));
+        scrollChatToBottomIfNeeded();
+      }
+    }
+
+    function endCodeBlock() {
+      if (!currentCodeElement) return;
+
+      // remove leading/trailing blank lines
+      while (codeLines.length && codeLines[0].trim() === '') {
+        codeLines.shift();
+      }
+      while (codeLines.length && codeLines[codeLines.length - 1].trim() === '') {
+        codeLines.pop();
+      }
+
+      // find min indentation
+      let minIndent = Infinity;
+      for (const ln of codeLines) {
+        if (ln.trim() === '') continue;
+        const match = ln.match(/^(\s+)/);
+        if (match) {
+          const indentCount = match[1].length;
+          if (indentCount < minIndent) {
+            minIndent = indentCount;
+          }
+        } else {
+          minIndent = 0;
+          break;
+        }
+      }
+      if (!Number.isFinite(minIndent)) {
+        minIndent = 0;
+      }
+
+      // reassemble lines, removing minIndent
+      const cleaned = codeLines.map(ln => ln.slice(minIndent)).join('\n');
+      currentCodeElement.textContent = cleaned;
+
+      inCodeBlock = false;
+      currentCodeElement = null;
+      codeLines = [];
+
+      // Force new partial text element after code block:
+      currentPartialTextElement = null;
+    }
+
+    // -----------------------------------------------------
+    // PARSING STREAMED CHUNKS
+    // -----------------------------------------------------
+    function parseAndAppendChunk(newText) {
+      // If we're *already* inside a <think> block, handle it in real-time:
+      if (inThinkBlock) {
+        const closeTag = "</think>";
+        const closeIdx = newText.indexOf(closeTag);
+        if (closeIdx === -1) {
+          // No close tag found yet; append everything to the active think block
+          appendThinkText(newText);
+          return;
+        } else {
+          // Append up to the close tag, then end the block
+          const beforeClose = newText.slice(0, closeIdx);
+          appendThinkText(beforeClose);
+          endThinkBlock();
+          const remainder = newText.slice(closeIdx + closeTag.length);
+          if (remainder) {
+            parseAndAppendChunk(remainder);
+          }
+          return;
+        }
+      }
+
+      // Otherwise, process in line-based mode for normal text or code
+      let textToProcess = leftoverLine + newText;
+      leftoverLine = "";
+
+      // Split on newlines to handle code blocks and potential <think> triggers
+      const segments = textToProcess.split('\n');
+      for (let i = 0; i < segments.length - 1; i++) {
+        processLine(segments[i]);
+      }
+      leftoverLine = segments[segments.length - 1];
+
+      // Attempt partial display for leftover line, unless it might trigger code or think
+      if (!inCodeBlock && leftoverLine) {
+        const trimmedLeft = leftoverLine.trim();
+        if (
+          trimmedLeft.startsWith('```') ||
+          dashedLineRegex.test(trimmedLeft) ||
+          trimmedLeft === '<think>' ||
+          trimmedLeft === '</think>'
+        ) {
+          updatePartialText(currentBotMessageContainer, "");
+        } else {
+          updatePartialText(currentBotMessageContainer, leftoverLine);
+        }
+      }
+    }
+
+    function processLine(line) {
+      const trimmed = line.trim();
+
+      // Toggle code blocks with code fences or dashed lines
+      if (trimmed.startsWith('```') || dashedLineRegex.test(trimmed)) {
+        if (!inCodeBlock) {
+          inCodeBlock = true;
+          startCodeBlock(currentBotMessageContainer);
+        } else {
+          endCodeBlock();
+        }
+        return;
+      }
+
+      // Check for <think> start (only if the line is exactly "<think>")
+      if (trimmed === '<think>') {
+        // If any text remains besides the tag, add it normally first
+        if (line.replace('<think>', '').trim().length > 0) {
+          appendNormalText(currentBotMessageContainer, line.replace('<think>', ''));
+        }
+        inThinkBlock = true;
+        startThinkBlock(currentBotMessageContainer);
+        return;
+      }
+
+      // Check for direct </think> (in case it appears alone)
+      if (trimmed === '</think>') {
+        endThinkBlock();
+        return;
+      }
+
+      // If inside a code block, treat as code line
+      if (inCodeBlock) {
+        appendCodeLine(line);
+      } else {
+        if (line.trim().length > 0) {
+          appendNormalText(currentBotMessageContainer, line);
+        }
+      }
+    }
+
+    // -----------------------------------------------------
+    // SENDING & STREAMING
+    // -----------------------------------------------------
+    async function sendMessage() {
+      const message = userInput.value.trim();
+      if (!message) return;
+
+      // 1) Append the user message
+      appendMessage('user', message);
+      conversation.push({ role: 'user', content: message });
+      userInput.value = '';
+
+      // 2) Create a new container for the bot response
+      currentBotMessageContainer = createBotMessageContainer();
+
+      // Reset parser states
+      leftoverLine = "";
+      inCodeBlock = false;
+      codeLines = [];
+      inThinkBlock = false;
+      currentThinkBlock = null;
+
+      // Scroll down immediately
+      scrollChatToBottom();
+
+      try {
+        // Example endpoint – adjust as needed
+        const response = await fetch('/chat-completion/stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: modelSelect.value,
+            messages: conversation
+          })
+        });
+
+        if (!response.body) {
+          throw new Error('No readable stream in response.');
+        }
+
+        scrollChatToBottom();
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let botMessageFull = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value);
+          botMessageFull += chunk;
+
+          // Process each chunk for real-time updates
+          parseAndAppendChunk(chunk);
+          await new Promise(r => setTimeout(r, 0));
+        }
+
+        // Instead of calling parseAndAppendChunk('\n'),
+        // remove the current partial text element and flush the leftover line.
+        if (leftoverLine) {
+          if (currentPartialTextElement && currentPartialTextElement.parentNode) {
+            currentPartialTextElement.parentNode.removeChild(currentPartialTextElement);
+            currentPartialTextElement = null;
+          }
+          processLine(leftoverLine);
+          leftoverLine = "";
+        }
+
+        conversation.push({ role: 'assistant', content: botMessageFull });
+
+      } catch (err) {
+        console.error('Error streaming:', err);
+        appendMessage('bot', 'Error: ' + err.message);
+      }
+    }
+
+    sendButton.addEventListener('click', sendMessage);
+    userInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+  </script>
+</body>
+</html>
