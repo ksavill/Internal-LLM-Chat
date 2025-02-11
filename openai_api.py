@@ -25,6 +25,12 @@ class OpenAIInterface:
             "image": True,
         }
 
+    def is_api_key_configured(self) -> bool:
+        """
+        Returns True if the OpenAI API Key has been set successfully.
+        """
+        return bool(openai.api_key)
+
     def _supports(self, feature: str) -> bool:
         return self.capabilities.get(feature, False)
 

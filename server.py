@@ -63,6 +63,28 @@ async def get_ollama_models():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/openai-models")
+async def get_openai_models():
+    """
+    Returns the list of available OpenAI models if an API key is configured.
+    If not, it returns an empty list.
+    """
+    # Instantiate the OpenAIInterface with a default/dummy model.
+    openai_interface = OpenAIInterface(model="gpt-4o-mini")
+    
+    # Check if the API key is configured.
+    if not openai_interface.is_api_key_configured():
+        # If no API key is configured, return no OpenAI models.
+        return {"models": []}
+    
+    models = [
+        {"NAME": "o3-mini"},
+        {"NAME": "o1-preview"},
+        {"NAME": "gpt-4o"},
+        {"NAME": "gpt-4o-mini"}
+    ]
+    return {"models": models}
+
 @app.post("/chat-completion/stream")
 async def chat_stream(request: ChatRequest):
     """
