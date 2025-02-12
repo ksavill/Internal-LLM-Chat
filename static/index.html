@@ -428,14 +428,56 @@
       const copyBtn = document.createElement('button');
       copyBtn.classList.add('copy-button');
       copyBtn.textContent = 'Copy';
+      // copyBtn.addEventListener('click', () => {
+      //   navigator.clipboard.writeText(codeEl.innerText)
+      //     .then(() => {
+      //       const oldText = copyBtn.textContent;
+      //       copyBtn.textContent = 'Copied!';
+      //       setTimeout(() => { copyBtn.textContent = oldText; }, 1500);
+      //     })
+      //     .catch(err => console.error('Clipboard error:', err));
+      // });
+
       copyBtn.addEventListener('click', () => {
-        navigator.clipboard.writeText(codeEl.innerText)
-          .then(() => {
-            const oldText = copyBtn.textContent;
-            copyBtn.textContent = 'Copied!';
-            setTimeout(() => { copyBtn.textContent = oldText; }, 1500);
-          })
-          .catch(err => console.error('Clipboard error:', err));
+        const text = codeEl.innerText;
+        
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          navigator.clipboard.writeText(text)
+            .then(() => {
+              const oldText = copyBtn.textContent;
+              copyBtn.textContent = 'Copied!';
+              setTimeout(() => { copyBtn.textContent = oldText; }, 1500);
+            })
+            .catch(err => console.error('Clipboard error:', err));
+        } else {
+          // Fallback for non-secure contexts: use document.execCommand('copy')
+          const textArea = document.createElement('textarea');
+          textArea.value = text;
+          
+          // Position offscreen
+          textArea.style.position = 'fixed';
+          textArea.style.top = '-1000px';
+          textArea.style.left = '-1000px';
+          
+          document.body.appendChild(textArea);
+          textArea.focus();
+          textArea.select();
+          
+          try {
+            const successful = document.execCommand('copy');
+            if (successful) {
+              const oldText = copyBtn.textContent;
+              copyBtn.textContent = 'Copied!';
+              setTimeout(() => { copyBtn.textContent = oldText; }, 1500);
+            } else {
+              console.error('Fallback: Copy command was unsuccessful.');
+            }
+          } catch (err) {
+            console.error('Fallback: Oops, unable to copy', err);
+          }
+          
+          document.body.removeChild(textArea);
+        }
       });
 
       const scrollLockBtn = document.createElement('button');
