@@ -4,7 +4,9 @@ import os
 class OpenAIInterface:
     def __init__(self, model: str, api_key: str = None):
         """
-        model: e.g. "gpt-4o-mini" or another available model name
+        model: e.g. "gpt-4o-mini" or another available model name.
+               For models "o3-mini-low", "o3-mini-medium", or "o3-mini-high",
+               special payload modifications will be applied.
         api_key: if not provided, we look for an environment variable.
         """
         self.model = model
@@ -24,6 +26,21 @@ class OpenAIInterface:
             "tool": True,
             "image": True,
         }
+    
+    def _prepare_payload(self, base_payload: dict) -> dict:
+        """
+        If the model is one of: o3-mini-low, o3-mini-medium, or o3-mini-high,
+        then change the model in the payload to "o3-mini" and add a 'reasoning_effort'
+        parameter with the corresponding suffix value.
+        """
+        if self.model in ["o3-mini-low", "o3-mini-medium", "o3-mini-high"]:
+            # Extract the reasoning effort from the model name (low, medium, high)
+            reasoning_effort = self.model.split("-")[-1]
+            base_payload["model"] = "o3-mini"
+            base_payload["reasoning_effort"] = reasoning_effort
+        else:
+            base_payload["model"] = self.model
+        return base_payload
 
     def is_api_key_configured(self) -> bool:
         """
@@ -42,16 +59,30 @@ class OpenAIInterface:
         if not self._supports("chat"):
             raise ValueError(f"Model '{self.model}' does not support chat requests.")
 
-        # "stream=True" returns a generator that yields partial completions
-        response_stream = openai.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            stream=True,
+        # Process images if provided.
+        images = kwargs.pop("images", None)
+        conversation_history = list(messages)
+        if images:
+            # Normalize images to a list if needed.
+            if isinstance(images, str):
+                images = [images]
+            for image in images:
+                conversation_history.append({
+                    "role": "user",
+                    "content": [{"type": "image_url", "image_url": {"url": image}}]
+                })
+
+        # Build the payload
+        payload = {
+            "messages": conversation_history,
+            "stream": True,
             **kwargs
-        )
-        # `response_stream` is an iterable, so yield each chunk
+        }
+        payload = self._prepare_payload(payload)
+
+        response_stream = openai.chat.completions.create(**payload)
+        # Yield each chunk from the response stream.
         for chunk in response_stream:
-            # print("DEBUG chunk: ", chunk)
             yield chunk
 
     def send_chat_nonstreaming(self, messages: list, **kwargs):
@@ -61,11 +92,26 @@ class OpenAIInterface:
         if not self._supports("chat"):
             raise ValueError(f"Model '{self.model}' does not support chat requests.")
 
-        # "stream=False" (the default) returns the entire response
-        completion = openai.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            stream=False,
+        # Process images if provided.
+        images = kwargs.pop("images", None)
+        conversation_history = list(messages)
+        if images:
+            # Normalize images to a list if needed.
+            if isinstance(images, str):
+                images = [images]
+            for image in images:
+                conversation_history.append({
+                    "role": "user",
+                    "content": [{"type": "image_url", "image_url": {"url": image}}]
+                })
+
+        # Build the payload
+        payload = {
+            "messages": conversation_history,
+            "stream": False,
             **kwargs
-        )
+        }
+        payload = self._prepare_payload(payload)
+
+        completion = openai.chat.completions.create(**payload)
         return completion

@@ -1,14 +1,16 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
-from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
+import logging
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse, PlainTextResponse
 from fastapi.concurrency import run_in_threadpool
-from typing import List, Optional
+from typing import List, Optional, Union
 from pydantic import BaseModel
 import base64
 
 from async_ollama_interface import AsyncOllamaInterface
 from openai_api import OpenAIInterface
-
 from ollama_list_models import list_models
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -23,18 +25,17 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     model: Optional[str] = "llama3.2"  # Default model for chat requests.
     messages: List[ChatMessage]
+    stream: Optional[bool] = False
+    image_b64: Optional[Union[str, List[str]]] = None
 
 # -----------------------
 # Helper: Choose which interface to use
 # -----------------------
+
 def get_interface(model_name: str):
     """
     For a given model_name, decide whether to use the Ollama interface 
     or the OpenAI interface.
-    This is just a simple example:
-      - If the model name *starts with* 'gpt-' or 'gpt4' or something similar,
-        we treat it as an OpenAI model.
-      - Otherwise, we default to the Ollama interface.
     """
     openai_like = [
         "gpt-4", "gpt-4o", "gpt-3.5", 
@@ -52,12 +53,7 @@ def get_interface(model_name: str):
 
 @app.get("/ollama-models")
 async def get_ollama_models():
-    """
-    Calls the 'ollama list' command using our synchronous list_models()
-    implementation and returns a JSON response containing the structured model list.
-    """
     try:
-        # Run the blocking CLI function in a thread pool.
         models = await run_in_threadpool(list_models)
         return JSONResponse(content={"models": models})
     except Exception as e:
@@ -65,19 +61,13 @@ async def get_ollama_models():
 
 @app.get("/openai-models")
 async def get_openai_models():
-    """
-    Returns the list of available OpenAI models if an API key is configured.
-    If not, it returns an empty list.
-    """
-    # Instantiate the OpenAIInterface with a default/dummy model.
     openai_interface = OpenAIInterface(model="gpt-4o-mini")
-    
-    # Check if the API key is configured.
     if not openai_interface.is_api_key_configured():
-        # If no API key is configured, return no OpenAI models.
         return {"models": []}
-    
     models = [
+        # {"NAME": "o3-mini-high"},
+        # {"NAME": "o3-mini-medium"},
+        # {"NAME": "o3-mini-low"},
         {"NAME": "o3-mini"},
         {"NAME": "o1-preview"},
         {"NAME": "gpt-4o"},
@@ -85,84 +75,140 @@ async def get_openai_models():
     ]
     return {"models": models}
 
-@app.post("/chat-completion/stream")
-async def chat_stream(request: ChatRequest):
-    """
-    Streaming chat endpoint.
-    The client sends a JSON payload with a list of messages.
-    The response is streamed back as plain text.
-    """
-    try:
-        interface = get_interface(request.model)
-
-        # If the interface is the async Ollama interface:
-        if isinstance(interface, AsyncOllamaInterface):
-            # 1. Await the async streaming generator
-            stream_generator = await interface.send_chat_streaming(
-                [m.dict() for m in request.messages]
-            )
-
-            # 2. Create an async generator function that yields chunk data
-            async def streamer():
-                async for chunk in stream_generator:
-                    if "message" in chunk and "content" in chunk["message"]:
-                        # Ollama chunk structure
-                        text = chunk["message"]["content"]
-                        yield text.encode("utf-8")
-                    elif "choices" in chunk and "delta" in chunk["choices"][0]:
-                        # OpenAI-like chunk structure from Ollama
-                        delta = chunk["choices"][0]["delta"]
-                        if "content" in delta:
-                            text = delta["content"]
-                            yield text.encode("utf-8")
-
-            return StreamingResponse(streamer(), media_type="text/plain")
-
-        # Otherwise, it's the sync OpenAIInterface:
-        else:
-            # 1. Call the sync streaming generator
-            stream_generator = interface.send_chat_streaming(
-                [m.dict() for m in request.messages]
-            )
-
-            # 2. Wrap the sync generator in an async generator 
-            #    so FastAPI can stream it.
-            async def streamer():
-                for chunk in stream_generator:
-                    # chunk is a ChatCompletionChunk object
-                    if chunk.choices and chunk.choices[0].delta:
-                        delta = chunk.choices[0].delta
-                        # delta is a ChoiceDelta object
-                        if delta.content:
-                            yield delta.content.encode("utf-8")
-
-            return StreamingResponse(streamer(), media_type="text/plain")
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
 @app.post("/chat-completion")
-async def chat_non_stream(request: ChatRequest):
-    """
-    Non-streaming chat endpoint.
-    The client sends a JSON payload with a list of messages 
-    and receives a JSON response.
-    """
+async def chat_completion(chat_req: ChatRequest, req: Request):
     try:
-        interface = get_interface(request.model)
+        interface = get_interface(chat_req.model)
 
+        # Normalize images if provided.
+        images = chat_req.image_b64
+        if images and isinstance(images, str):
+            images = [images]
+
+        # ---- Async Ollama Interface ----
         if isinstance(interface, AsyncOllamaInterface):
-            # Async call:
-            response = await interface.send_chat_nonstreaming(
-                [m.dict() for m in request.messages]
-            )
-        else:
-            # Sync call:
-            response = interface.send_chat_nonstreaming(
-                [m.dict() for m in request.messages]
-            )
+            if images:
+                # Clean image data: remove any data URI header.
+                cleaned_images = []
+                for img in images:
+                    if img.startswith("data:"):
+                        _, _, data = img.partition(",")
+                        cleaned_images.append(data)
+                    else:
+                        cleaned_images.append(img)
+                images = cleaned_images
 
-        return JSONResponse(content=response)
+                prompt = " ".join([m.content for m in chat_req.messages])
+                response = await interface.send_vision(prompt, images)
+                # Extract only the text from the response.
+                if hasattr(response, "response"):
+                    text_response = response.response
+                elif isinstance(response, dict) and "response" in response:
+                    text_response = response["response"]
+                else:
+                    text_response = str(response)
+                return PlainTextResponse(text_response)
+
+            # Text-only branch.
+            conversation_history = [m.dict() for m in chat_req.messages]
+            if chat_req.stream:
+                stream_generator = await interface.send_chat_streaming(conversation_history)
+                
+                async def streamer():
+                    async for chunk in stream_generator:
+                        try:
+                            if "message" in chunk and "content" in chunk["message"]:
+                                yield chunk["message"]["content"].encode("utf-8")
+                            elif "choices" in chunk and "delta" in chunk["choices"][0]:
+                                delta = chunk["choices"][0]["delta"]
+                                if "content" in delta:
+                                    yield delta["content"].encode("utf-8")
+                        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
+                            logger.info("Client disconnected during streaming (Ollama async): %s", str(e))
+                            break
+                return StreamingResponse(streamer(), media_type="text/plain")
+            else:
+                conversation_history = [m.dict() for m in chat_req.messages]
+                response = await interface.send_chat_nonstreaming(conversation_history)
+                if hasattr(response, "response"):
+                    text_response = response.response
+                elif isinstance(response, dict) and "response" in response:
+                    text_response = response["response"]
+                else:
+                    text_response = str(response)
+                return PlainTextResponse(text_response)
+
+        # ---- OpenAI Interface ----
+        elif isinstance(interface, OpenAIInterface):
+            conversation_history = [m.dict() for m in chat_req.messages]
+            if images:
+                for img in images:
+                    conversation_history.append({
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": img}}
+                        ]
+                    })
+            if chat_req.stream:
+                # Get the synchronous generator from OpenAI.
+                stream_generator = interface.send_chat_streaming(conversation_history)
+                
+                async def streamer():
+                    try:
+                        for chunk in stream_generator:
+                            # Check if client has disconnected.
+                            if await req.is_disconnected():
+                                logger.info("Client disconnected; aborting OpenAI stream.")
+                                break
+                            if chunk.choices and chunk.choices[0].delta:
+                                delta = chunk.choices[0].delta
+                                if delta.content:
+                                    try:
+                                        yield delta.content.encode("utf-8")
+                                    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
+                                        logger.info("Client disconnected during yield (OpenAI): %s", str(e))
+                                        break
+                    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
+                        logger.info("Client disconnected during streaming (OpenAI): %s", str(e))
+                    except Exception as e:
+                        logger.exception("Unexpected error during OpenAI streaming: %s", str(e))
+                    finally:
+                        # Attempt to close the underlying generator to cancel the OpenAI stream.
+                        if hasattr(stream_generator, "close"):
+                            try:
+                                stream_generator.close()
+                            except Exception as e:
+                                logger.debug("Error closing OpenAI stream generator: %s", str(e))
+                return StreamingResponse(streamer(), media_type="text/plain")
+            else:
+                response = interface.send_chat_nonstreaming(conversation_history)
+                return PlainTextResponse(response)
+
+        # ---- Fallback for unknown interface types ----
+        else:
+            if images:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Model '{chat_req.model}' does not support image inputs."
+                )
+            conversation_history = [m.dict() for m in chat_req.messages]
+            if chat_req.stream:
+                stream_generator = interface.send_chat_streaming(conversation_history)
+                async def streamer():
+                    for chunk in stream_generator:
+                        if chunk.choices and chunk.choices[0].delta:
+                            delta = chunk.choices[0].delta
+                            if delta.content:
+                                try:
+                                    yield delta.content.encode("utf-8")
+                                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
+                                    logger.info("Client disconnected during yield (Fallback): %s", str(e))
+                                    break
+                return StreamingResponse(streamer(), media_type="text/plain")
+            else:
+                response = interface.send_chat_nonstreaming(conversation_history)
+                return PlainTextResponse(response)
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -172,44 +218,21 @@ async def vision(
     image: UploadFile = File(...),
     model: str = Form("llava")
 ):
-    """
-    Vision endpoint.
-    Accepts a multipart/form-data request with:
-      - 'prompt': The text prompt (as a form field).
-      - 'image': An image file.
-      - 'model': (Optional) The model name, defaulting to "llava".
-    The image is read, base64-encoded, and sent to the async interface.
-    """
     try:
-        # Read and base64-encode the image
         content = await image.read()
         image_base64 = base64.b64encode(content).decode("utf-8")
-
-        # For your custom models, e.g. "llava," we assume AsyncOllamaInterface
         interface = AsyncOllamaInterface(model=model)
-
-        vision_response = await interface.send_vision(
-            prompt=prompt,
-            images=[image_base64]
-        )
+        vision_response = await interface.send_vision(prompt=prompt, images=[image_base64])
         return JSONResponse(content=vision_response)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/", response_class=FileResponse)
 async def get_index():
-    """
-    Serves the static HTML file for the chat UI.
-    Ensure that the HTML file is placed in the "static" directory.
-    """
     return FileResponse("static/index.html")
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
-    """
-    Returns the favicon.ico from the static directory.
-    This endpoint disables schema inclusion for browsers automatically requesting favicon.
-    """
     return FileResponse("static/favicon.ico")
 
 if __name__ == "__main__":

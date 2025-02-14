@@ -54,10 +54,56 @@
       margin-right: auto;
       text-align: left;
     }
+    /* Styling for images appended to a user message */
+    .chat-message.user .user-images {
+      margin-top: 10px;
+    }
+    .chat-message.user .user-images img {
+      max-width: 200px;
+      margin-right: 10px;
+      border: 1px solid #555;
+      border-radius: 4px;
+    }
     .input-section {
       display: flex;
       flex-direction: column;
       gap: 10px;
+      position: relative;
+    }
+    /* Image preview container styling */
+    #image-preview-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    #image-preview-container .image-preview {
+      position: relative;
+      width: 100px;
+      height: 100px;
+      overflow: hidden;
+      border: 1px solid #555;
+      border-radius: 4px;
+    }
+    #image-preview-container .image-preview img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    #image-preview-container .remove-image {
+      position: absolute;
+      top: 0;
+      right: 0;
+      background-color: rgba(0,0,0,0.7);
+      color: white;
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+      display: none;
+      padding: 0 4px;
+    }
+    #image-preview-container .image-preview:hover .remove-image {
+      display: block;
     }
     .model-select-container {
       display: flex;
@@ -185,6 +231,8 @@
     </div>
     <div class="chat-window" id="chat-window"></div>
     <div class="input-section">
+      <!-- Image preview container -->
+      <div id="image-preview-container"></div>
       <div class="model-select-container">
         <label for="model-select">Choose Model:</label>
         <select id="model-select"></select>
@@ -205,6 +253,7 @@
     const sendButton = document.getElementById('send-button');
     const modelSelect = document.getElementById('model-select');
     const newChatButton = document.getElementById('new-chat-button');
+    const imagePreviewContainer = document.getElementById('image-preview-container');
 
     let conversation = [];
 
@@ -230,6 +279,10 @@
     // Track active controllers and the current active request.
     let activeAbortControllers = [];
     let currentRequestController = null;
+
+    // Global variables for pasted images.
+    let pastedImages = []; // Array of objects: { id, data }
+    let nextImageId = 0;
 
     window.onload = async function() {
       await fetchAndPopulateOllamaModels();
@@ -428,15 +481,6 @@
       const copyBtn = document.createElement('button');
       copyBtn.classList.add('copy-button');
       copyBtn.textContent = 'Copy';
-      // copyBtn.addEventListener('click', () => {
-      //   navigator.clipboard.writeText(codeEl.innerText)
-      //     .then(() => {
-      //       const oldText = copyBtn.textContent;
-      //       copyBtn.textContent = 'Copied!';
-      //       setTimeout(() => { copyBtn.textContent = oldText; }, 1500);
-      //     })
-      //     .catch(err => console.error('Clipboard error:', err));
-      // });
 
       copyBtn.addEventListener('click', () => {
         const text = codeEl.innerText;
@@ -450,19 +494,14 @@
             })
             .catch(err => console.error('Clipboard error:', err));
         } else {
-          // Fallback for non-secure contexts: use document.execCommand('copy')
           const textArea = document.createElement('textarea');
           textArea.value = text;
-          
-          // Position offscreen
           textArea.style.position = 'fixed';
           textArea.style.top = '-1000px';
           textArea.style.left = '-1000px';
-          
           document.body.appendChild(textArea);
           textArea.focus();
           textArea.select();
-          
           try {
             const successful = document.execCommand('copy');
             if (successful) {
@@ -475,7 +514,6 @@
           } catch (err) {
             console.error('Fallback: Oops, unable to copy', err);
           }
-          
           document.body.removeChild(textArea);
         }
       });
@@ -496,7 +534,7 @@
       expandBtn.textContent = 'Expand';
       expandBtn.addEventListener('click', () => {
         if (codeBlockDiv.style.maxHeight === 'none') {
-          codeBlockDiv.style.maxHeight = '400px';
+          codeBlockDiv.style.maxHeight = '600px';
           expandBtn.textContent = 'Expand';
         } else {
           codeBlockDiv.style.maxHeight = 'none';
@@ -636,6 +674,51 @@
     }
 
     // -----------------------------------------------------
+    // MULTIMODAL: IMAGE PASTE & PREVIEW HANDLING
+    // -----------------------------------------------------
+    userInput.addEventListener('paste', (event) => {
+      const items = event.clipboardData.items;
+      for (const item of items) {
+        if (item.type.indexOf("image") !== -1) {
+          const file = item.getAsFile();
+          const reader = new FileReader();
+          reader.onload = function(e) {
+            const base64Data = e.target.result;
+            const imageObj = { id: nextImageId++, data: base64Data };
+            pastedImages.push(imageObj);
+            addImagePreview(imageObj.data, imageObj.id);
+          }
+          reader.readAsDataURL(file);
+        }
+      }
+    });
+
+    function addImagePreview(base64Data, imageId) {
+      const previewDiv = document.createElement('div');
+      previewDiv.classList.add('image-preview');
+      previewDiv.dataset.imageId = imageId;
+      
+      const imgEl = document.createElement('img');
+      imgEl.src = base64Data;
+      
+      const removeBtn = document.createElement('button');
+      removeBtn.classList.add('remove-image');
+      removeBtn.textContent = 'x';
+      removeBtn.addEventListener('click', () => {
+        removeImagePreview(imageId, previewDiv);
+      });
+      
+      previewDiv.appendChild(imgEl);
+      previewDiv.appendChild(removeBtn);
+      imagePreviewContainer.appendChild(previewDiv);
+    }
+
+    function removeImagePreview(imageId, previewDiv) {
+      pastedImages = pastedImages.filter(img => img.id !== parseInt(imageId));
+      previewDiv.remove();
+    }
+
+    // -----------------------------------------------------
     // SENDING & STREAMING
     // -----------------------------------------------------
     async function sendMessage() {
@@ -643,18 +726,35 @@
       if (activeAbortControllers.length > 0) {
         activeAbortControllers.forEach(controller => controller.abort());
         activeAbortControllers = [];
-        // Reset the button UI to blue "Send"
         sendButton.textContent = 'Send';
         sendButton.style.backgroundColor = '#007acc';
       }
 
       const message = userInput.value.trim();
-      if (!message) return;
+      if (!message && pastedImages.length === 0) return;
 
-      // Append the user message with preserved formatting.
-      appendMessage('user', message);
+      // Append user message bubble and include any images.
+      const userBubble = appendMessage('user', message);
+      if (pastedImages.length > 0) {
+        const imagesDiv = document.createElement('div');
+        imagesDiv.classList.add('user-images');
+        pastedImages.forEach(img => {
+          const imgEl = document.createElement('img');
+          imgEl.src = img.data;
+          imagesDiv.appendChild(imgEl);
+        });
+        userBubble.appendChild(imagesDiv);
+      }
+
+      // Add the text to conversation.
       conversation.push({ role: 'user', content: message });
+      // Prepare image data for the payload.
+      const imageDataArray = pastedImages.map(img => img.data);
+
+      // Clear the input field and preview area immediately.
       userInput.value = '';
+      pastedImages = [];
+      imagePreviewContainer.innerHTML = '';
 
       currentBotMessageContainer = createBotMessageContainer();
       leftoverLine = "";
@@ -664,22 +764,41 @@
       currentThinkBlock = null;
       scrollChatToBottom();
 
-      // Create a new AbortController for this streaming request.
       const controller = new AbortController();
       activeAbortControllers.push(controller);
       currentRequestController = controller;
 
-      // Update the send button to a red "Stop" button.
       sendButton.textContent = 'Stop';
       sendButton.style.backgroundColor = 'red';
 
       try {
-        const response = await fetch('/chat-completion/stream', {
+        const response = await fetch('/chat-completion', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: modelSelect.value, messages: conversation }),
+          body: JSON.stringify({ 
+            model: modelSelect.value, 
+            messages: conversation, 
+            stream: true,
+            image_b64: imageDataArray
+          }),
           signal: controller.signal
         });
+
+        // Check for a bad response status.
+        if (!response.ok) {
+          let errorMessage = 'An error occurred while processing your message';
+          try {
+            const errorJson = await response.json();
+            if (errorJson.detail) {
+              errorMessage = errorJson.detail;
+            }
+          } catch (jsonError) {
+            // If JSON parsing fails, fallback message is used.
+          }
+          const errorBubble = appendMessage('bot', errorMessage);
+          errorBubble.style.backgroundColor = 'red';
+          return;
+        }
 
         if (!response.body) { throw new Error('No readable stream in response.'); }
         scrollChatToBottom();
@@ -707,15 +826,13 @@
         conversation.push({ role: 'assistant', content: botMessageFull });
       } catch (err) {
         if (err.name === 'AbortError') {
-          // appendMessage('bot', 'Generation canceled.');
+          // Generation canceled.
         } else {
           console.error('Error streaming:', err);
           appendMessage('bot', 'Error: ' + err.message);
         }
       } finally {
-        // Remove this controller from activeAbortControllers.
         activeAbortControllers = activeAbortControllers.filter(c => c !== controller);
-        // Only reset the button if the finished request is still the active one.
         if (currentRequestController === controller) {
           sendButton.textContent = 'Send';
           sendButton.style.backgroundColor = '#007acc';
@@ -726,7 +843,21 @@
     userInput.addEventListener('keydown', e => {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
     });
-    newChatButton.addEventListener('click', () => { location.reload(); });
+    
+    newChatButton.addEventListener('click', () => {
+      conversation = [];
+      chatWindow.innerHTML = '';
+      leftoverLine = "";
+      inCodeBlock = false;
+      codeLines = [];
+      currentBotMessageContainer = null;
+      currentPartialTextElement = null;
+      inThinkBlock = false;
+      currentThinkBlock = null;
+      userInput.value = '';
+      pastedImages = [];
+      imagePreviewContainer.innerHTML = '';
+    });
   </script>
 </body>
 </html>
