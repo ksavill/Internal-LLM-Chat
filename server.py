@@ -38,8 +38,8 @@ def get_interface(model_name: str):
     or the OpenAI interface.
     """
     openai_like = [
-        "gpt-4", "gpt-4o", "gpt-3.5", 
-        "gpt-4o-mini", "o1", "o1-mini", 
+        "gpt-4", "gpt-4o", "gpt-3.5",
+        "gpt-4o-mini", "o1", "o1-mini",
         "o3", "o3-mini"
     ]
     if any(model_name.startswith(m) for m in openai_like):
@@ -65,9 +65,6 @@ async def get_openai_models():
     if not openai_interface.is_api_key_configured():
         return {"models": []}
     models = [
-        # {"NAME": "o3-mini-high"},
-        # {"NAME": "o3-mini-medium"},
-        # {"NAME": "o3-mini-low"},
         {"NAME": "o3-mini"},
         {"NAME": "o1-preview"},
         {"NAME": "gpt-4o"},
@@ -149,22 +146,39 @@ async def chat_completion(chat_req: ChatRequest, req: Request):
                             {"type": "image_url", "image_url": {"url": img}}
                         ]
                     })
+
             if chat_req.stream:
-                # Get the synchronous generator from OpenAI.
-                stream_generator = interface.send_chat_streaming(conversation_history)
-                
+                # IMPORTANT FIX: Await the async method to get the async generator.
+                stream_generator = await interface.send_chat_streaming(conversation_history)
+
                 async def streamer():
                     try:
-                        for chunk in stream_generator:
+                        async for chunk in stream_generator:
                             # Check if client has disconnected.
                             if await req.is_disconnected():
                                 logger.info("Client disconnected; aborting OpenAI stream.")
                                 break
-                            if chunk.choices and chunk.choices[0].delta:
-                                delta = chunk.choices[0].delta
-                                if delta.content:
+
+                            # If chunk is a valid piece of data from OpenAI,
+                            # you might parse out the text. Typically chunk has structure:
+                            # {
+                            #   "id": "...",
+                            #   "object": "chat.completion.chunk",
+                            #   "created": 12345,
+                            #   "model": "...",
+                            #   "choices": [
+                            #       {
+                            #           "delta": { "content": "some text..." },
+                            #           ...
+                            #       }
+                            #   ]
+                            # }
+                            if "choices" in chunk and chunk["choices"]:
+                                delta = chunk["choices"][0].get("delta", {})
+                                content = delta.get("content")
+                                if content:
                                     try:
-                                        yield delta.content.encode("utf-8")
+                                        yield content.encode("utf-8")
                                     except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
                                         logger.info("Client disconnected during yield (OpenAI): %s", str(e))
                                         break
@@ -172,17 +186,21 @@ async def chat_completion(chat_req: ChatRequest, req: Request):
                         logger.info("Client disconnected during streaming (OpenAI): %s", str(e))
                     except Exception as e:
                         logger.exception("Unexpected error during OpenAI streaming: %s", str(e))
-                    finally:
-                        # Attempt to close the underlying generator to cancel the OpenAI stream.
-                        if hasattr(stream_generator, "close"):
-                            try:
-                                stream_generator.close()
-                            except Exception as e:
-                                logger.debug("Error closing OpenAI stream generator: %s", str(e))
+                    # No explicit final close needed for an async generator, but you could do so if desired
                 return StreamingResponse(streamer(), media_type="text/plain")
+
             else:
-                response = interface.send_chat_nonstreaming(conversation_history)
-                return PlainTextResponse(response)
+                # Non-streaming
+                response = await interface.send_chat_nonstreaming(conversation_history)
+                # `response` should be a dict with the full completion
+                # Convert it to text as needed
+                if "choices" in response and len(response["choices"]) > 0:
+                    # Typical OpenAI format: response["choices"][0]["message"]["content"]
+                    content_text = response["choices"][0]["message"]["content"]
+                    return PlainTextResponse(content_text)
+                else:
+                    # Fallback if something unexpected:
+                    return PlainTextResponse(str(response))
 
         # ---- Fallback for unknown interface types ----
         else:
@@ -193,9 +211,10 @@ async def chat_completion(chat_req: ChatRequest, req: Request):
                 )
             conversation_history = [m.dict() for m in chat_req.messages]
             if chat_req.stream:
+                # If there's a custom fallback interface...
                 stream_generator = interface.send_chat_streaming(conversation_history)
                 async def streamer():
-                    for chunk in stream_generator:
+                    async for chunk in stream_generator:
                         if chunk.choices and chunk.choices[0].delta:
                             delta = chunk.choices[0].delta
                             if delta.content:
