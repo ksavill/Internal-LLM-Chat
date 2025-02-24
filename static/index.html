@@ -5,18 +5,27 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Internal LLM</title>
   <link rel="icon" href="/favicon.ico" type="image/x-icon" />
+  
+  <!-- Prism.js for syntax highlighting -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.24.1/themes/prism-dark.min.css" rel="stylesheet" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.24.1/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.24.1/components/prism-python.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.24.1/components/prism-javascript.min.js"></script>
+  
   <style>
-    /* Basic styling */
+    /* ------------------------------
+       Global & Modernized UI Styles 
+       ------------------------------ */
     body {
-      background-color: #121212;
-      color: #e0e0e0;
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #0d1117;
+      color: #c9d1d9;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
       margin: 0;
       padding: 0;
     }
     .container {
-      max-width: 80%;
-      margin: 40px auto;
+      max-width: 90%;
+      margin: 20px auto;
       padding: 20px;
       position: relative;
     }
@@ -26,8 +35,66 @@
       align-items: center;
       margin-bottom: 20px;
     }
+    .header h1 {
+      margin: 0;
+    }
+
+    /* ------------------------------
+       Toggle Button (always visible)
+       ------------------------------ */
+    #toggle-sidebar-button {
+      position: fixed;
+      top: 20px;
+      left: 20px;
+      background: none;
+      border: none;
+      color: #c9d1d9;
+      font-size: 24px;
+      cursor: pointer;
+      z-index: 2001; /* Above the sidebar */
+    }
+    #toggle-sidebar-button:hover {
+      color: #ffffff;
+    }
+
+    /* ------------------------------
+       Sidebar Styles
+       ------------------------------ */
+    .sidebar {
+      position: fixed;
+      top: 0;
+      left: -250px;       /* Hide offscreen by default */
+      width: 250px;
+      height: 100%;
+      background-color: #161b22;
+      transition: left 0.3s; /* animate sliding in/out */
+      overflow-y: auto;
+      padding: 20px;
+      box-shadow: 2px 0 5px rgba(0,0,0,0.5);
+      z-index: 1000;
+    }
+    .sidebar.open {
+      left: 0;            /* Slide in when "open" class is applied */
+    }
+    #conversation-list .conversation-preview {
+      cursor: pointer;
+      padding: 10px;
+      border-bottom: 1px solid #30363d;
+    }
+    #conversation-list .conversation-preview:hover {
+      background-color: #21262d;
+    }
+    #not-signed-in-message {
+      color: #8b949e;
+      text-align: center;
+      margin-top: 50px;
+    }
+
+    /* ------------------------------
+       Chat Window & Message Styles
+       ------------------------------ */
     .chat-window {
-      background-color: #1e1e1e;
+      background-color: #161b22;
       border-radius: 8px;
       padding: 20px;
       height: 70vh; /* 70% of viewport height */
@@ -42,15 +109,15 @@
       word-wrap: break-word;
     }
     .chat-message.user {
-      background-color: #007acc;
+      background-color: #238636;
       color: #fff;
       display: inline-block;
       text-align: left;
       white-space: pre-wrap;
     }
     .chat-message.bot {
-      background-color: #333;
-      color: #fff;
+      background-color: #21262d;
+      color: #c9d1d9;
       margin-right: auto;
       text-align: left;
     }
@@ -61,9 +128,10 @@
     .chat-message.user .user-images img {
       max-width: 200px;
       margin-right: 10px;
-      border: 1px solid #555;
+      border: 1px solid #30363d;
       border-radius: 4px;
     }
+
     .input-section {
       display: flex;
       flex-direction: column;
@@ -82,7 +150,7 @@
       width: 100px;
       height: 100px;
       overflow: hidden;
-      border: 1px solid #555;
+      border: 1px solid #30363d;
       border-radius: 4px;
     }
     #image-preview-container .image-preview img {
@@ -90,7 +158,7 @@
       height: 100%;
       object-fit: cover;
     }
-    #image-preview-container .remove-image {
+    #image-preview-container .image-preview .remove-image {
       position: absolute;
       top: 0;
       right: 0;
@@ -111,10 +179,10 @@
       gap: 10px;
     }
     select {
-      background-color: #1e1e1e;
-      color: #e0e0e0;
+      background-color: #161b22;
+      color: #c9d1d9;
       border-radius: 4px;
-      border: 1px solid #555;
+      border: 1px solid #30363d;
       padding: 8px;
     }
     textarea {
@@ -126,40 +194,43 @@
       border: none;
       border-radius: 4px;
       font-size: 1rem;
-      background-color: #1e1e1e;
-      color: #e0e0e0;
+      background-color: #161b22;
+      color: #c9d1d9;
     }
     button {
       padding: 10px 20px;
       border: none;
       border-radius: 4px;
-      background-color: #007acc;
+      background-color: #238636;
       color: #fff;
       cursor: pointer;
       font-size: 1rem;
       white-space: nowrap;
     }
     button:hover {
-      background-color: #005f99;
+      background-color: #2ea043;
     }
     /* New Chat Button styling */
     #new-chat-button {
       padding: 8px 16px;
       border: none;
       border-radius: 4px;
-      background-color: #007acc;
+      background-color: #238636;
       color: #fff;
       cursor: pointer;
       font-size: 1rem;
     }
     #new-chat-button:hover {
-      background-color: #005f99;
+      background-color: #2ea043;
     }
-    /* THINKING BLOCK */
+
+    /* ------------------------------
+       Thinking Block Styles
+       ------------------------------ */
     .bot-think {
       background-color: #2c2c2c;
-      color: #bbb;
-      border-left: 3px solid #555;
+      color: #8b949e;
+      border-left: 3px solid #30363d;
       padding: 8px 12px;
       margin: 10px 0;
       border-radius: 4px;
@@ -177,71 +248,122 @@
     .think-content {
       margin-top: 5px;
       font-size: 0.9rem;
-      color: #888;
+      color: #8b949e;
       display: none;
       white-space: pre-wrap;
     }
-    /* CODE BLOCK */
+
+    /* ------------------------------
+       Code Block Styles (Prism.js)
+       ------------------------------ */
     .code-block {
       background-color: #282c34;
       padding: 15px;
       border-radius: 8px;
       margin: 10px 0;
       font-family: monospace;
-      max-height: 600px;
-      overflow-y: auto;
+      overflow-x: auto;
       position: relative;
     }
     .code-block pre {
       margin: 0;
-      padding-top: 50px;
       white-space: pre-wrap;
       word-wrap: break-word;
     }
     .copy-button {
-      position: sticky;
-      top: 0;
-      float: right;
+      position: absolute;
+      top: 5px;
+      right: 5px;
       padding: 5px 10px;
       background-color: #61dafb;
       border: none;
       cursor: pointer;
       color: #282c34;
       border-radius: 4px;
-      margin: 5px;
+      font-size: 0.8rem;
       z-index: 1;
     }
     .copy-button:hover {
       background-color: #4fb0e6;
     }
     code {
-      background-color: #2c2c2c;
+      background-color: #2c2c34;
       padding: 2px 4px;
       border-radius: 4px;
       font-family: monospace;
       color: #fff;
     }
+
+    /* ------------------------------
+       Modal Styles (Authentication)
+       ------------------------------ */
+    .modal {
+      position: fixed;
+      z-index: 2000;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      overflow: auto;
+      background-color: rgba(0,0,0,0.4);
+    }
+    .modal-content {
+      background-color: #161b22;
+      margin: 15% auto;
+      padding: 20px;
+      border: 1px solid #30363d;
+      width: 300px;
+      border-radius: 8px;
+    }
+    .close-modal {
+      color: #8b949e;
+      float: right;
+      font-size: 28px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    .close-modal:hover,
+    .close-modal:focus {
+      color: #c9d1d9;
+      text-decoration: none;
+    }
   </style>
 </head>
 <body>
+
+  <!-- Toggle button (ALWAYS visible on the left edge) -->
+  <button id="toggle-sidebar-button">≡</button>
+
+  <!-- Sidebar for previous conversations (slides in/out) -->
+  <div class="sidebar" id="sidebar">
+    <div id="conversation-list"></div>
+    <div id="not-signed-in-message" style="display: none;">
+      You are currently not signed in. Sign in to view previous chats and resume.
+    </div>
+  </div>
+
   <div class="container">
     <div class="header">
       <h1>Internal LLM Chat</h1>
+      <div id="auth-buttons"></div>
       <div>
         <button id="new-chat-button">New Chat</button>
         <button id="export-chat-button" style="display: none;">Export Conversation</button>
-        <!-- Import conversation button -->
-        <button id="import-chat-button" style="display: inline-block;">Import Conversation</button>
+        <!-- <button id="import-chat-button">Import Conversation</button> -->
       </div>
     </div>
+
     <div class="chat-window" id="chat-window"></div>
+
     <div class="input-section">
       <!-- Image preview container -->
       <div id="image-preview-container"></div>
+
       <div class="model-select-container">
         <label for="model-select">Choose Model:</label>
         <select id="model-select"></select>
       </div>
+
       <div style="display: flex; gap: 10px;">
         <textarea id="user-input" placeholder="Type here (Shift+Enter for new line)..."></textarea>
         <button id="send-button">Send</button>
@@ -252,64 +374,86 @@
   <!-- Hidden file input for importing JSON -->
   <input type="file" id="import-file-input" accept=".json" style="display:none;" />
 
+  <!-- Authentication Modals -->
+  <!-- Signup Modal -->
+  <div id="signup-modal" class="modal" style="display: none;">
+    <div class="modal-content">
+      <span class="close-modal" onclick="closeModal('signup-modal')">&times;</span>
+      <h2>Sign Up</h2>
+      <form id="signup-form">
+        <input type="text" id="signup-username" placeholder="Username" required /><br/><br/>
+        <input type="password" id="signup-password" placeholder="Password" required /><br/><br/>
+        <button type="submit">Sign Up</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Login Modal -->
+  <div id="login-modal" class="modal" style="display: none;">
+    <div class="modal-content">
+      <span class="close-modal" onclick="closeModal('login-modal')">&times;</span>
+      <h2>Sign In</h2>
+      <form id="login-form">
+        <input type="text" id="login-username" placeholder="Username" required /><br/><br/>
+        <input type="password" id="login-password" placeholder="Password" required /><br/><br/>
+        <button type="submit">Sign In</button>
+      </form>
+    </div>
+  </div>
+
   <script>
     // -----------------------------------------------------
-    // GLOBALS & PARSER STATE
+    // GLOBAL VARIABLES & STATE
     // -----------------------------------------------------
-    const chatWindow = document.getElementById('chat-window');
-    const userInput = document.getElementById('user-input');
-    const sendButton = document.getElementById('send-button');
-    const modelSelect = document.getElementById('model-select');
-    const newChatButton = document.getElementById('new-chat-button');
-    const exportChatButton = document.getElementById('export-chat-button');
-    const importChatButton = document.getElementById('import-chat-button');
-    const importFileInput = document.getElementById('import-file-input');
-
+    const chatWindow            = document.getElementById('chat-window');
+    const userInput             = document.getElementById('user-input');
+    const sendButton            = document.getElementById('send-button');
+    const modelSelect           = document.getElementById('model-select');
+    const newChatButton         = document.getElementById('new-chat-button');
+    const exportChatButton      = document.getElementById('export-chat-button');
+    const importChatButton      = document.getElementById('import-chat-button');
+    const importFileInput       = document.getElementById('import-file-input');
     const imagePreviewContainer = document.getElementById('image-preview-container');
 
-    // We'll store the chosen model and conversation together.
-    // conversation is an array, model is a string
-    let conversation = [];
-    let currentModel = null;
+    // Sidebar & toggle button
+    const sidebar               = document.getElementById('sidebar');
+    const toggleSidebarButton   = document.getElementById('toggle-sidebar-button');
 
-    // Leftover lines and parser state
-    let leftoverLine = "";
-    let currentBotMessageContainer = null;
-    let currentPartialTextElement = null;
+    let conversation            = [];
+    let currentModel            = null;
+    let currentConversationId   = null; // For tracking conversation IDs
 
-    let inCodeBlock = false;
-    let currentCodeElement = null;
-    let codeLines = [];
+    let leftoverLine            = "";
+    let currentBotMessageContainer  = null;
+    let currentPartialTextElement   = null;
+    let inCodeBlock             = false;
+    let currentCodeElement      = null;
+    let codeLines               = [];
+    let currentCodeBlockContainer  = null;
 
-    // For scroll-locking in code blocks
-    let currentCodeBlockContainer = null;
+    let thinkBlocks             = [];
+    let currentThinkBlock       = null;
+    let inThinkBlock            = false;
 
-    // THINKING BLOCK STATE
-    let thinkBlocks = [];
-    let currentThinkBlock = null;
-    let inThinkBlock = false;
-
-    // Treat lines of 20+ dashes as alternate code fences
-    const dashedLineRegex = /^-{20,}$/;
-
-    // Track active controllers and the current active request.
-    let activeAbortControllers = [];
-    let currentRequestController = null;
-
-    // Global variables for pasted images.
-    let pastedImages = []; // Array of objects: { id, data }
-    let nextImageId = 0;
+    let pastedImages            = [];
+    let nextImageId             = 0;
+    const dashedLineRegex       = /^-{20,}$/;
+    let activeAbortControllers  = [];
+    let currentRequestController= null;
 
     // -----------------------------------------------------
-    // ON LOAD, FETCH MODELS
+    // ON LOAD: FETCH MODELS & INITIAL AUTH/SIDEBAR SETUP
     // -----------------------------------------------------
     window.onload = async function() {
       await fetchAndPopulateOllamaModels();
       await fetchAndPopulateOpenaiModels();
-    }
+      setPreferredModel();  // Set our default based on preference order
+      updateAuthButtons();
+      fetchConversations();
+    };
 
     // -----------------------------------------------------
-    // FETCH MODELS AND POPULATE SELECT
+    // MODEL FETCH FUNCTIONS
     // -----------------------------------------------------
     async function fetchAndPopulateOllamaModels() {
       try {
@@ -360,13 +504,36 @@
     }
 
     // -----------------------------------------------------
-    // HELPER FUNCTIONS
+    // Set Preferred Model Based on Priority Order
+    // -----------------------------------------------------
+    function setPreferredModel() {
+      const preferredModels = [
+        "o3-mini-high",
+        "qwen2.5-coder:32b",
+        "qwen2.5-coder:14b",
+        "qwen2.5-coder:7b",
+        "qwen2.5-coder:1.5b"
+      ];
+      const options = modelSelect.options;
+      for (const modelName of preferredModels) {
+        for (let i = 0; i < options.length; i++) {
+          if (options[i].value === modelName) {
+            modelSelect.selectedIndex = i;
+            currentModel = modelName;
+            return;
+          }
+        }
+      }
+    }
+
+    // -----------------------------------------------------
+    // HELPER FUNCTIONS FOR CHAT
     // -----------------------------------------------------
     function scrollChatToBottom() {
       chatWindow.scrollTop = chatWindow.scrollHeight;
     }
     function scrollChatToBottomIfNeeded() {
-      const tolerance = 50; // pixels
+      const tolerance = 50;
       const isNearBottom = chatWindow.scrollHeight - chatWindow.scrollTop - chatWindow.clientHeight <= tolerance;
       if (isNearBottom) {
         chatWindow.scrollTop = chatWindow.scrollHeight;
@@ -387,12 +554,12 @@
       return text;
     }
     function formatUserMessage(text) {
-      // This logic handles code fences in user text.
       if (text.indexOf('```') !== -1) {
         const segments = text.split(/```/);
         let result = "";
         segments.forEach((segment, index) => {
           if (index % 2 === 0) {
+            // Normal text
             let processed = escapeHTML(segment);
             processed = processed.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
             processed = processed.replace(/`([^`]+)`/g, "<code>$1</code>");
@@ -414,10 +581,8 @@
       const msg = document.createElement('div');
       msg.classList.add('chat-message', sender);
       if (sender === 'user') {
-        // Format user text with code fencing, etc.
         msg.innerHTML = formatUserMessage(content);
       } else {
-        // Bot or other roles: plain text output + basic markup
         msg.textContent = content;
       }
       chatWindow.appendChild(msg);
@@ -493,86 +658,21 @@
     }
 
     // -----------------------------------------------------
-    // CODE BLOCK FUNCTIONS (with scroll lock & expand controls)
+    // CODE BLOCK FUNCTIONS (with Prism.js)
     // -----------------------------------------------------
     function startCodeBlock(container) {
       const codeBlockDiv = document.createElement('div');
       codeBlockDiv.classList.add('code-block');
-      codeBlockDiv.style.maxHeight = '600px';
-      codeBlockDiv.scrollLocked = true;
 
       const copyBtn = document.createElement('button');
       copyBtn.classList.add('copy-button');
       copyBtn.textContent = 'Copy';
-
-      copyBtn.addEventListener('click', () => {
-        const text = codeEl.innerText;
-        
-        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-          navigator.clipboard.writeText(text)
-            .then(() => {
-              const oldText = copyBtn.textContent;
-              copyBtn.textContent = 'Copied!';
-              setTimeout(() => { copyBtn.textContent = oldText; }, 1500);
-            })
-            .catch(err => console.error('Clipboard error:', err));
-        } else {
-          // Fallback for older browsers
-          const textArea = document.createElement('textarea');
-          textArea.value = text;
-          textArea.style.position = 'fixed';
-          textArea.style.top = '-1000px';
-          textArea.style.left = '-1000px';
-          document.body.appendChild(textArea);
-          textArea.focus();
-          textArea.select();
-          try {
-            const successful = document.execCommand('copy');
-            if (successful) {
-              const oldText = copyBtn.textContent;
-              copyBtn.textContent = 'Copied!';
-              setTimeout(() => { copyBtn.textContent = oldText; }, 1500);
-            } else {
-              console.error('Fallback: Copy command was unsuccessful.');
-            }
-          } catch (err) {
-            console.error('Fallback: Oops, unable to copy', err);
-          }
-          document.body.removeChild(textArea);
-        }
-      });
-
-      const scrollLockBtn = document.createElement('button');
-      scrollLockBtn.classList.add('copy-button');
-      scrollLockBtn.textContent = 'Scroll Locked';
-      scrollLockBtn.addEventListener('click', () => {
-        if (!codeBlockDiv.scrollLocked) {
-          codeBlockDiv.scrollTop = codeBlockDiv.scrollHeight;
-          codeBlockDiv.scrollLocked = true;
-          scrollLockBtn.textContent = 'Scroll Locked';
-        }
-      });
-
-      const expandBtn = document.createElement('button');
-      expandBtn.classList.add('copy-button');
-      expandBtn.textContent = 'Expand';
-      expandBtn.addEventListener('click', () => {
-        if (codeBlockDiv.style.maxHeight === 'none') {
-          codeBlockDiv.style.maxHeight = '600px';
-          expandBtn.textContent = 'Expand';
-        } else {
-          codeBlockDiv.style.maxHeight = 'none';
-          expandBtn.textContent = 'Collapse';
-        }
-      });
 
       const preEl = document.createElement('pre');
       const codeEl = document.createElement('code');
       preEl.appendChild(codeEl);
 
       codeBlockDiv.appendChild(copyBtn);
-      codeBlockDiv.appendChild(scrollLockBtn);
-      codeBlockDiv.appendChild(expandBtn);
       codeBlockDiv.appendChild(preEl);
 
       container.appendChild(codeBlockDiv);
@@ -580,36 +680,33 @@
       currentCodeBlockContainer = codeBlockDiv;
       currentCodeElement = codeEl;
       codeLines = [];
+      codeLines.lang = null; // To store detected language
 
-      codeBlockDiv.addEventListener('scroll', () => {
-        const tolerance = 10;
-        if (codeBlockDiv.scrollHeight - codeBlockDiv.scrollTop - codeBlockDiv.clientHeight > tolerance) {
-          if (codeBlockDiv.scrollLocked) {
-            codeBlockDiv.scrollLocked = false;
-            scrollLockBtn.textContent = 'Scroll to Bottom';
-          }
-        } else {
-          if (!codeBlockDiv.scrollLocked) {
-            codeBlockDiv.scrollLocked = true;
-            scrollLockBtn.textContent = 'Scroll Locked';
-          }
-        }
+      copyBtn.addEventListener('click', () => {
+        const text = codeEl.innerText;
+        navigator.clipboard.writeText(text).then(() => {
+          copyBtn.textContent = 'Copied!';
+          setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+        });
       });
-
-      if (codeBlockDiv.scrollLocked) {
-        codeBlockDiv.scrollTop = codeBlockDiv.scrollHeight;
-      }
     }
+
     function appendCodeLine(line) {
+      // If first line might be a language name, detect it
+      if (codeLines.length === 0 && !codeLines.lang) {
+        const langMatch = line.match(/^([a-zA-Z]+)\s*$/);
+        if (langMatch) {
+          codeLines.lang = langMatch[1].toLowerCase();
+          return; // do not add this line to the code
+        }
+      }
       codeLines.push(line);
       if (currentCodeElement) {
         currentCodeElement.appendChild(document.createTextNode(line + "\n"));
-        if (currentCodeBlockContainer && currentCodeBlockContainer.scrollLocked) {
-          currentCodeBlockContainer.scrollTop = currentCodeBlockContainer.scrollHeight;
-        }
         scrollChatToBottomIfNeeded();
       }
     }
+
     function endCodeBlock() {
       if (!currentCodeElement) return;
 
@@ -620,8 +717,7 @@
       while (codeLines.length && codeLines[codeLines.length - 1].trim() === '') {
         codeLines.pop();
       }
-
-      // Determine minimal indentation for pretty formatting
+      // Determine minimal indentation
       let minIndent = Infinity;
       for (const ln of codeLines) {
         if (ln.trim() === '') continue;
@@ -636,8 +732,15 @@
       }
       if (!Number.isFinite(minIndent)) { minIndent = 0; }
 
+      // Rebuild code with indentation removed
       const cleaned = codeLines.map(ln => ln.slice(minIndent)).join('\n');
       currentCodeElement.textContent = cleaned;
+
+      // Syntax highlighting if language detected
+      if (codeLines.lang && Prism.languages[codeLines.lang]) {
+        currentCodeElement.classList.add(`language-${codeLines.lang}`);
+        Prism.highlightElement(currentCodeElement);
+      }
 
       inCodeBlock = false;
       currentCodeElement = null;
@@ -650,7 +753,6 @@
     // PARSING STREAMED CHUNKS
     // -----------------------------------------------------
     function parseAndAppendChunk(newText) {
-      // If we are in a <think> block, handle that separately
       if (inThinkBlock) {
         const closeTag = "</think>";
         const closeIdx = newText.indexOf(closeTag);
@@ -658,7 +760,6 @@
           appendThinkText(newText);
           return;
         } else {
-          // Append everything up to </think>
           const beforeClose = newText.slice(0, closeIdx);
           appendThinkText(beforeClose);
           endThinkBlock();
@@ -670,7 +771,6 @@
         }
       }
 
-      // Split lines for further processing
       let textToProcess = leftoverLine + newText;
       leftoverLine = "";
       const segments = textToProcess.split('\n');
@@ -687,7 +787,6 @@
           trimmedLeft === '<think>' ||
           trimmedLeft === '</think>'
         );
-        // If leftover line is a code fence or <think>, skip partial text
         if (isFence) {
           updatePartialText(currentBotMessageContainer, "");
         } else {
@@ -698,8 +797,7 @@
 
     function processLine(line) {
       const trimmed = line.trim();
-
-      // Check for code fence or dashed line
+      // Code fence or dashed line
       if (trimmed.startsWith('```') || dashedLineRegex.test(trimmed)) {
         if (!inCodeBlock) {
           inCodeBlock = true;
@@ -709,9 +807,8 @@
         }
         return;
       }
-      // Check for <think> block
+      // <think> block
       if (trimmed === '<think>') {
-        // If there's text on the same line, append it first
         if (line.replace('<think>', '').trim().length > 0) {
           appendNormalText(currentBotMessageContainer, line.replace('<think>', ''));
         }
@@ -724,7 +821,7 @@
         return;
       }
 
-      // If we're in a code block, just append lines
+      // If in code block, append lines
       if (inCodeBlock) {
         appendCodeLine(line);
       } else {
@@ -749,7 +846,7 @@
             const imageObj = { id: nextImageId++, data: base64Data };
             pastedImages.push(imageObj);
             addImagePreview(imageObj.data, imageObj.id);
-          }
+          };
           reader.readAsDataURL(file);
         }
       }
@@ -759,17 +856,17 @@
       const previewDiv = document.createElement('div');
       previewDiv.classList.add('image-preview');
       previewDiv.dataset.imageId = imageId;
-      
+
       const imgEl = document.createElement('img');
       imgEl.src = base64Data;
-      
+
       const removeBtn = document.createElement('button');
       removeBtn.classList.add('remove-image');
       removeBtn.textContent = 'x';
       removeBtn.addEventListener('click', () => {
         removeImagePreview(imageId, previewDiv);
       });
-      
+
       previewDiv.appendChild(imgEl);
       previewDiv.appendChild(removeBtn);
       imagePreviewContainer.appendChild(previewDiv);
@@ -781,11 +878,9 @@
     }
 
     // -----------------------------------------------------
-    // EXPORT & IMPORT
+    // EXPORT & IMPORT CONVERSATIONS
     // -----------------------------------------------------
-    // 1) Export
     function exportConversation() {
-      // Export the current model and conversation together
       const exportObj = {
         model: currentModel || "",
         messages: conversation
@@ -804,38 +899,27 @@
       exportChatButton.style.display = conversation.length > 0 ? 'inline-block' : 'none';
     }
 
-    // 2) Import
-    importChatButton.addEventListener('click', () => {
-      // Trigger hidden file input
-      importFileInput.value = null; // Clear any previous file
-      importFileInput.click();
-    });
+    // importChatButton.addEventListener('click', () => {
+    //   importFileInput.value = null;
+    //   importFileInput.click();
+    // });
 
     importFileInput.addEventListener('change', handleImportFile);
 
     function handleImportFile(event) {
       const file = event.target.files[0];
-      if (!file) return; // No file selected
-
+      if (!file) return;
       const reader = new FileReader();
       reader.onload = function(e) {
         try {
           const importedData = JSON.parse(e.target.result);
-
-          // ---- New: Abort any active streams before loading ----
           if (activeAbortControllers.length > 0) {
             activeAbortControllers.forEach(controller => controller.abort());
             activeAbortControllers = [];
           }
-
-          // Validate structure: must be an object with 'messages' array
-          if (
-            typeof importedData !== "object" ||
-            !Array.isArray(importedData.messages)
-          ) {
+          if (typeof importedData !== "object" || !Array.isArray(importedData.messages)) {
             throw new Error("Imported JSON must have a 'messages' array.");
           }
-          // Basic validation of each message
           for (let i = 0; i < importedData.messages.length; i++) {
             const msg = importedData.messages[i];
             if (typeof msg !== "object" || !("role" in msg) || !("content" in msg)) {
@@ -853,15 +937,10 @@
               }
             }
           }
-
-          // If a model is provided, see if we can set it
           if (typeof importedData.model === "string") {
             setModelIfExists(importedData.model);
           }
-
-          // If all checks out, we can load it into conversation
           conversation = importedData.messages;
-          // Re-render the chat as if it was active
           renderConversationFromArray();
         } catch (ex) {
           alert("Failed to import conversation: " + ex.message);
@@ -872,20 +951,18 @@
     }
 
     function setModelIfExists(modelName) {
-      // Search the dropdown for a matching model
       const opts = modelSelect.options;
       for (let i = 0; i < opts.length; i++) {
         if (opts[i].value === modelName) {
           modelSelect.selectedIndex = i;
-          currentModel = modelName; // store in our variable
+          currentModel = modelName;
           return;
         }
       }
-      // If not found, we do nothing (leaves the currently selected model)
+      // If not found, leave the current selection unchanged
     }
 
     function renderConversationFromArray() {
-      // Clear everything like a "New Chat", but don't empty conversation
       chatWindow.innerHTML = '';
       leftoverLine = "";
       inCodeBlock = false;
@@ -898,13 +975,9 @@
       pastedImages = [];
       imagePreviewContainer.innerHTML = '';
 
-      // Build from conversation
       conversation.forEach(msg => {
         if (msg.role === 'user') {
-          // Create user bubble
           const userBubble = appendMessage('user', msg.content);
-
-          // If user had images, show them
           if (msg.images && Array.isArray(msg.images)) {
             const imagesDiv = document.createElement('div');
             imagesDiv.classList.add('user-images');
@@ -916,15 +989,13 @@
             userBubble.appendChild(imagesDiv);
           }
         } else if (msg.role === 'assistant') {
-          // "Replay" the assistant message so code blocks / <think> blocks are shown
           currentBotMessageContainer = createBotMessageContainer();
           leftoverLine = "";
           inCodeBlock = false;
           inThinkBlock = false;
           currentThinkBlock = null;
 
-          parseAndAppendChunk(msg.content + "\n"); // parse entire assistant text
-
+          parseAndAppendChunk(msg.content + "\n");
           if (leftoverLine) {
             processLine(leftoverLine);
             leftoverLine = "";
@@ -934,31 +1005,26 @@
 
       scrollChatToBottom();
       updateExportButtonVisibility();
-
-      // Update currentModel from the modelSelect
-      // (In case the user manually changes it, we keep them in sync)
       currentModel = modelSelect.value;
     }
 
     // -----------------------------------------------------
-    // SENDING & STREAMING
+    // SEND MESSAGE & STREAM RESPONSE (with auth token)
     // -----------------------------------------------------
     async function sendMessage() {
-      // Abort any active streams.
+      // Abort any active streams
       if (activeAbortControllers.length > 0) {
         activeAbortControllers.forEach(controller => controller.abort());
         activeAbortControllers = [];
         sendButton.textContent = 'Send';
-        sendButton.style.backgroundColor = '#007acc';
+        sendButton.style.backgroundColor = '#238636';
       }
 
       const message = userInput.value.trim();
       if (!message && pastedImages.length === 0) return;
 
-      // Append user message bubble and include any images.
+      // User bubble
       const userBubble = appendMessage('user', message);
-
-      // Build the user message object for conversation storage.
       let userMessageObj = { role: 'user', content: message };
 
       if (pastedImages.length > 0) {
@@ -970,26 +1036,18 @@
           imagesDiv.appendChild(imgEl);
         });
         userBubble.appendChild(imagesDiv);
-
-        // Include the base64 image data in the conversation object.
         userMessageObj.images = pastedImages.map(img => img.data);
       }
-
       conversation.push(userMessageObj);
       updateExportButtonVisibility();
-
-      // Update currentModel in case user changed the dropdown
       currentModel = modelSelect.value;
 
-      // Prepare image data for the request payload.
       const imageDataArray = pastedImages.map(img => img.data);
-
-      // Clear the input field and preview area immediately.
       userInput.value = '';
       pastedImages = [];
       imagePreviewContainer.innerHTML = '';
 
-      // Create container for bot's response
+      // Bot container
       currentBotMessageContainer = createBotMessageContainer();
       leftoverLine = "";
       inCodeBlock = false;
@@ -1005,20 +1063,26 @@
       sendButton.textContent = 'Stop';
       sendButton.style.backgroundColor = 'red';
 
+      const token = localStorage.getItem('token');
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       try {
         const response = await fetch('/chat-completion', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: headers,
           body: JSON.stringify({ 
             model: currentModel, 
             messages: conversation, 
             stream: true,
-            image_b64: imageDataArray
+            image_b64: imageDataArray,
+            conversation_id: currentConversationId
           }),
           signal: controller.signal
         });
 
-        // Check for a bad response status.
         if (!response.ok) {
           let errorMessage = 'An error occurred while processing your message';
           try {
@@ -1027,7 +1091,7 @@
               errorMessage = errorJson.detail;
             }
           } catch (jsonError) {
-            // If JSON parsing fails, fallback message is used.
+            // Fallback to generic error
           }
           const errorBubble = appendMessage('bot', errorMessage);
           errorBubble.style.backgroundColor = 'red';
@@ -1049,8 +1113,10 @@
           const chunk = decoder.decode(value);
           botMessageFull += chunk;
           parseAndAppendChunk(chunk);
+          // yield control briefly
           await new Promise(r => setTimeout(r, 0));
         }
+
         if (leftoverLine) {
           if (currentPartialTextElement && currentPartialTextElement.parentNode) {
             currentPartialTextElement.parentNode.removeChild(currentPartialTextElement);
@@ -1059,12 +1125,20 @@
           processLine(leftoverLine);
           leftoverLine = "";
         }
-        // Finally, store the bot's entire text in conversation
+        // Store final bot text in conversation
         conversation.push({ role: 'assistant', content: botMessageFull });
         updateExportButtonVisibility();
+
+        // If server returned a conversation ID, store it & refresh conversation list
+        const conversationId = response.headers.get('X-Conversation-ID');
+        if (conversationId) {
+          currentConversationId = conversationId;
+          fetchConversations(); // Refresh sidebar
+        }
+
       } catch (err) {
         if (err.name === 'AbortError') {
-          // Generation canceled.
+          // Generation canceled
         } else {
           console.error('Error streaming:', err);
           appendMessage('bot', 'Error: ' + err.message);
@@ -1073,7 +1147,7 @@
         activeAbortControllers = activeAbortControllers.filter(c => c !== controller);
         if (currentRequestController === controller) {
           sendButton.textContent = 'Send';
-          sendButton.style.backgroundColor = '#007acc';
+          sendButton.style.backgroundColor = '#238636';
         }
       }
     }
@@ -1085,7 +1159,8 @@
         sendMessage();
       }
     });
-    
+
+    // When user clicks "New Chat", reset local conversation and re-fetch
     newChatButton.addEventListener('click', () => {
       conversation = [];
       chatWindow.innerHTML = '';
@@ -1099,8 +1174,180 @@
       userInput.value = '';
       pastedImages = [];
       imagePreviewContainer.innerHTML = '';
+      currentConversationId = null; // Reset ID
+
       updateExportButtonVisibility();
+      fetchConversations(); // Refresh sidebar
     });
+
+    // -----------------------------------------------------
+    // AUTHENTICATION FUNCTIONS & LOGIC
+    // -----------------------------------------------------
+    function showModal(modalId) {
+      document.getElementById(modalId).style.display = 'block';
+    }
+    function closeModal(modalId) {
+      document.getElementById(modalId).style.display = 'none';
+    }
+    function updateAuthButtons() {
+      const authButtons = document.getElementById('auth-buttons');
+      const token = localStorage.getItem('token');
+      if (token) {
+        try {
+          const payload = JSON.parse(atob(token.split('.')[1]));
+          const username = payload.username;
+          authButtons.innerHTML = `
+            <span>Welcome back, ${username}</span>
+            <button onclick="logout()">Sign Out</button>
+          `;
+        } catch (e) {
+          localStorage.removeItem('token');
+          updateAuthButtons();
+        }
+      } else {
+        authButtons.innerHTML = `
+          <button onclick="showModal('signup-modal')">Sign Up</button>
+          <button onclick="showModal('login-modal')">Sign In</button>
+        `;
+      }
+    }
+
+    document.getElementById('signup-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('signup-username').value;
+      const password = document.getElementById('signup-password').value;
+      try {
+        const response = await fetch('/signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.detail || 'Signup failed');
+        }
+        alert('Signup successful! Please sign in.');
+        closeModal('signup-modal');
+      } catch (error) {
+        alert(error.message);
+      }
+    });
+
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('login-username').value;
+      const password = document.getElementById('login-password').value;
+      try {
+        const response = await fetch('/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.detail || 'Login failed');
+        }
+        const data = await response.json();
+        localStorage.setItem('token', data.token);
+        updateAuthButtons();
+        closeModal('login-modal');
+        fetchConversations(); // Refresh conversations after login
+      } catch (error) {
+        alert(error.message);
+      }
+    });
+
+    // Updated logout: clear token AND reset local conversation state
+    function logout() {
+      localStorage.removeItem('token');
+      updateAuthButtons();
+      document.getElementById('conversation-list').innerHTML = '';
+      document.getElementById('not-signed-in-message').style.display = 'block';
+      
+      // Reset current conversation state in the frontend
+      conversation = [];
+      chatWindow.innerHTML = '';
+      leftoverLine = "";
+      inCodeBlock = false;
+      codeLines = [];
+      currentBotMessageContainer = null;
+      currentPartialTextElement = null;
+      inThinkBlock = false;
+      currentThinkBlock = null;
+      userInput.value = '';
+      pastedImages = [];
+      imagePreviewContainer.innerHTML = '';
+      currentConversationId = null;
+    }
+
+    // -----------------------------------------------------
+    // SIDEBAR: TOGGLE & FETCHING CONVERSATIONS
+    // -----------------------------------------------------
+    toggleSidebarButton.addEventListener('click', () => {
+      if (sidebar.classList.contains('open')) {
+        sidebar.classList.remove('open');
+      } else {
+        sidebar.classList.add('open');
+      }
+    });
+
+    async function fetchConversations() {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        document.getElementById('not-signed-in-message').style.display = 'block';
+        document.getElementById('conversation-list').innerHTML = '';
+        return;
+      }
+      document.getElementById('not-signed-in-message').style.display = 'none';
+      try {
+        const response = await fetch('/conversations', {
+          headers: { 'Authorization': `Bearer ${token}` },
+        });
+        if (!response.ok) {
+          throw new Error('Failed to fetch conversations');
+        }
+        const data = await response.json();
+        const conversationList = document.getElementById('conversation-list');
+        conversationList.innerHTML = '';
+        data.conversations.forEach(conv => {
+          const div = document.createElement('div');
+          div.classList.add('conversation-preview');
+          div.innerHTML = `
+            <p>${conv.preview}</p>
+            <small>${new Date(conv.updated_at).toLocaleString()}</small>
+          `;
+          div.addEventListener('click', () => loadConversation(conv.conversation_id));
+          conversationList.appendChild(div);
+        });
+      } catch (error) {
+        console.error('Error fetching conversations:', error);
+      }
+    }
+
+    // --- FIXED: Immediately update currentConversationId when loading a conversation ---
+    async function loadConversation(conversationId) {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+      try {
+        const response = await fetch(`/conversations/${conversationId}`, {
+          headers: { 'Authorization': `Bearer ${token}` },
+        });
+        if (!response.ok) {
+          throw new Error('Failed to load conversation');
+        }
+        const data = await response.json();
+        // Update currentConversationId immediately so subsequent messages use the correct conversation
+        currentConversationId = conversationId;
+        // If the server returns data.model, update the model dropdown
+        if (typeof data.model === "string") {
+          setModelIfExists(data.model);
+        }
+        conversation = data.messages;
+        renderConversationFromArray();
+      } catch (error) {
+        console.error('Error loading conversation:', error);
+      }
+    }
   </script>
 </body>
 </html>

@@ -1,41 +1,83 @@
 import logging
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
+from fastapi import FastAPI, HTTPException, Request, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse, PlainTextResponse
-from fastapi.concurrency import run_in_threadpool
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import List, Optional, Union
 from pydantic import BaseModel
-import base64
+import jwt
+from datetime import datetime, timedelta
 
 from async_ollama_interface import AsyncOllamaInterface
 from openai_api import OpenAIInterface
 from ollama_list_models import list_models
+from database import get_db_connection, init_db, create_user, verify_user, create_conversation, update_conversation, get_user_conversations, get_conversation
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+init_db()
+
+SECRET_KEY = "kebin"
+
+# Security setup for JWT
+security = HTTPBearer()
+optional_security = HTTPBearer(auto_error=False)
+
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        user_id = payload["user_id"]
+        return user_id
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token has expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+def get_optional_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_security)) -> Optional[int]:
+    """
+    If a token is provided and valid, return user_id; otherwise return None.
+    """
+    if credentials is None:
+        return None
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        return payload.get("user_id")
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+        return None
 
 # -----------------------
 # Data Models for Chat API
 # -----------------------
-
 class ChatMessage(BaseModel):
     role: str
     content: str
+    # New: Support images in conversation messages
+    images: Optional[List[str]] = None
 
 class ChatRequest(BaseModel):
-    model: Optional[str] = "llama3.2"  # Default model for chat requests.
+    model: Optional[str] = "llama3.2"
     messages: List[ChatMessage]
     stream: Optional[bool] = False
     image_b64: Optional[Union[str, List[str]]] = None
+    conversation_id: Optional[str] = None
+
+class SignupRequest(BaseModel):
+    username: str
+    password: str
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
 
 # -----------------------
 # Helper: Choose which interface to use
 # -----------------------
-
 def get_interface(model_name: str):
     """
-    For a given model_name, decide whether to use the Ollama interface 
-    or the OpenAI interface.
+    Decide whether to use the Ollama interface or the OpenAI interface
+    based on model_name.
     """
     openai_like = [
         "gpt-4", "gpt-4o", "gpt-3.5",
@@ -48,12 +90,60 @@ def get_interface(model_name: str):
         return AsyncOllamaInterface(model=model_name)
 
 # -----------------------
-# API Endpoints
+# Authentication Endpoints
 # -----------------------
+@app.post("/signup")
+async def signup(signup_req: SignupRequest):
+    try:
+        create_user(signup_req.username, signup_req.password)
+        return {"message": "User created successfully"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
+@app.post("/login")
+async def login(login_req: LoginRequest):
+    user_id = verify_user(login_req.username, login_req.password)
+    if user_id:
+        payload = {
+            "user_id": user_id,
+            "username": login_req.username,
+            "exp": datetime.utcnow() + timedelta(hours=1)
+        }
+        token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+        return {"token": token}
+    else:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+# -----------------------
+# Conversation Endpoints
+# -----------------------
+@app.get("/conversations")
+async def get_conversations(current_user: int = Depends(get_current_user)):
+    conversations = get_user_conversations(current_user)
+    return {"conversations": conversations}
+
+@app.get("/conversations/{conversation_id}")
+async def get_conversation_detail(conversation_id: str, current_user: int = Depends(get_current_user)):
+    conn = get_db_connection()
+    cursor = conn.execute('SELECT user_id FROM conversations WHERE conversation_id = ?', (conversation_id,))
+    row = cursor.fetchone()
+    if not row or row['user_id'] != current_user:
+        raise HTTPException(status_code=403, detail="Not authorized to access this conversation")
+    messages = get_conversation(conversation_id)
+    if messages is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"messages": messages}  # Some users also return {"model": "...", "messages": [...]} if you store a model name
+
+# -----------------------
+# Models Endpoints
+# -----------------------
 @app.get("/ollama-models")
 async def get_ollama_models():
+    """
+    List local models available to Ollama.
+    """
     try:
+        from fastapi.concurrency import run_in_threadpool
         models = await run_in_threadpool(list_models)
         return JSONResponse(content={"models": models})
     except Exception as e:
@@ -61,31 +151,79 @@ async def get_ollama_models():
 
 @app.get("/openai-models")
 async def get_openai_models():
+    """
+    Return a static list of recognized "OpenAI" model names.
+    """
     openai_interface = OpenAIInterface(model="gpt-4o-mini")
     if not openai_interface.is_api_key_configured():
         return {"models": []}
+        
     models = [
-        {"NAME": "o3-mini"},
+        {"NAME": "o3-mini-high"},
+        {"NAME": "o3-mini-medium"},
+        {"NAME": "o3-mini-low"},
         {"NAME": "o1-preview"},
         {"NAME": "gpt-4o"},
         {"NAME": "gpt-4o-mini"}
     ]
     return {"models": models}
 
+# -----------------------
+# Chat Completion Endpoint
+# -----------------------
 @app.post("/chat-completion")
-async def chat_completion(chat_req: ChatRequest, req: Request):
+async def chat_completion(
+    chat_req: ChatRequest,
+    background_tasks: BackgroundTasks,
+    req: Request,
+    current_user: Optional[int] = Depends(get_optional_current_user)
+):
+    """
+    Main endpoint to request a chat completion from either Ollama or OpenAI.
+    If the user is authenticated, we store (and retrieve) conversation info in the DB.
+    If the user is not authenticated, we skip DB storage.
+    
+    The `images` can come in two ways:
+      1. As part of chat_req.messages (each ChatMessage can have images).
+      2. Via chat_req.image_b64 (a single or list of base64 images).
+    """
     try:
         interface = get_interface(chat_req.model)
 
-        # Normalize images if provided.
+        # images might come from image_b64 param
         images = chat_req.image_b64
         if images and isinstance(images, str):
+            # Convert single string => list of strings
             images = [images]
 
-        # ---- Async Ollama Interface ----
+        # Check conversation ID logic
+        if current_user and chat_req.conversation_id:
+            conn = get_db_connection()
+            cursor = conn.execute(
+                'SELECT user_id FROM conversations WHERE conversation_id = ?',
+                (chat_req.conversation_id,)
+            )
+            row = cursor.fetchone()
+            if not row or row['user_id'] != current_user:
+                raise HTTPException(status_code=403, detail="Not authorized to access this conversation")
+            conversation_id = chat_req.conversation_id
+        elif current_user:
+            # Authenticated user, no conversation ID => create a new conversation
+            conversation_id = create_conversation(current_user, chat_req.messages)
+        else:
+            # Not authenticated => do not track conversation
+            conversation_id = None
+
+        # Build conversation history in the format the LLM needs
+        # (For Ollama or OpenAI, typically the "content" field is the user/assistant text)
+        conversation_history = [m.model_dump() for m in chat_req.messages]
+
+        # =======================
+        # If using AsyncOllamaInterface
+        # =======================
         if isinstance(interface, AsyncOllamaInterface):
+            # If we have images => do a vision request
             if images:
-                # Clean image data: remove any data URI header.
                 cleaned_images = []
                 for img in images:
                     if img.startswith("data:"):
@@ -93,159 +231,114 @@ async def chat_completion(chat_req: ChatRequest, req: Request):
                         cleaned_images.append(data)
                     else:
                         cleaned_images.append(img)
-                images = cleaned_images
 
+                # You might combine the text content of all user messages:
                 prompt = " ".join([m.content for m in chat_req.messages])
-                response = await interface.send_vision(prompt, images)
-                # Extract only the text from the response.
-                if hasattr(response, "response"):
-                    text_response = response.response
-                elif isinstance(response, dict) and "response" in response:
-                    text_response = response["response"]
-                else:
-                    text_response = str(response)
-                return PlainTextResponse(text_response)
+                response = await interface.send_vision(prompt, cleaned_images)
+                content = response.get("response", str(response))
 
-            # Text-only branch.
-            conversation_history = [m.dict() for m in chat_req.messages]
+                # Save conversation if we have one
+                messages = chat_req.messages + [ChatMessage(role="assistant", content=content)]
+                if conversation_id:
+                    update_conversation(conversation_id, messages)
+
+                headers = {"X-Conversation-ID": conversation_id} if conversation_id else {}
+                return PlainTextResponse(content, headers=headers)
+
+            # Normal text chat with streaming or non-streaming
             if chat_req.stream:
                 stream_generator = await interface.send_chat_streaming(conversation_history)
-                
+                full_response = []
+
                 async def streamer():
                     async for chunk in stream_generator:
-                        try:
-                            if "message" in chunk and "content" in chunk["message"]:
-                                yield chunk["message"]["content"].encode("utf-8")
-                            elif "choices" in chunk and "delta" in chunk["choices"][0]:
-                                delta = chunk["choices"][0]["delta"]
-                                if "content" in delta:
-                                    yield delta["content"].encode("utf-8")
-                        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
-                            logger.info("Client disconnected during streaming (Ollama async): %s", str(e))
-                            break
-                return StreamingResponse(streamer(), media_type="text/plain")
-            else:
-                conversation_history = [m.dict() for m in chat_req.messages]
-                response = await interface.send_chat_nonstreaming(conversation_history)
-                if hasattr(response, "response"):
-                    text_response = response.response
-                elif isinstance(response, dict) and "response" in response:
-                    text_response = response["response"]
-                else:
-                    text_response = str(response)
-                return PlainTextResponse(text_response)
+                        content = chunk.get("message", {}).get("content", "")
+                        full_response.append(content)
+                        yield content.encode("utf-8")
 
-        # ---- OpenAI Interface ----
+                def save_conversation():
+                    # Combine user messages with the final assistant message
+                    messages = chat_req.messages + [
+                        ChatMessage(role="assistant", content="".join(full_response))
+                    ]
+                    if conversation_id:
+                        update_conversation(conversation_id, messages)
+
+                if conversation_id:
+                    background_tasks.add_task(save_conversation)
+
+                headers = {"X-Conversation-ID": conversation_id} if conversation_id else {}
+                return StreamingResponse(streamer(), media_type="text/plain", headers=headers)
+            else:
+                # Non-streaming
+                response = await interface.send_chat_nonstreaming(conversation_history)
+                content = response.get("response", str(response))
+
+                messages = chat_req.messages + [ChatMessage(role="assistant", content=content)]
+                if conversation_id:
+                    update_conversation(conversation_id, messages)
+
+                headers = {"X-Conversation-ID": conversation_id} if conversation_id else {}
+                return PlainTextResponse(content, headers=headers)
+
+        # =======================
+        # If using OpenAIInterface
+        # =======================
         elif isinstance(interface, OpenAIInterface):
-            conversation_history = [m.dict() for m in chat_req.messages]
+            # If images => add them to conversation in some custom format
             if images:
                 for img in images:
                     conversation_history.append({
                         "role": "user",
-                        "content": [
-                            {"type": "image_url", "image_url": {"url": img}}
-                        ]
+                        "content": [{"type": "image_url", "image_url": {"url": img}}]
                     })
 
             if chat_req.stream:
-                # IMPORTANT FIX: Await the async method to get the async generator.
                 stream_generator = await interface.send_chat_streaming(conversation_history)
+                full_response = []
 
                 async def streamer():
-                    try:
-                        async for chunk in stream_generator:
-                            # Check if client has disconnected.
-                            if await req.is_disconnected():
-                                logger.info("Client disconnected; aborting OpenAI stream.")
-                                break
+                    async for chunk in stream_generator:
+                        if "choices" in chunk and chunk["choices"]:
+                            delta = chunk["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                        else:
+                            content = ""
+                        full_response.append(content)
+                        yield content.encode("utf-8")
 
-                            # If chunk is a valid piece of data from OpenAI,
-                            # you might parse out the text. Typically chunk has structure:
-                            # {
-                            #   "id": "...",
-                            #   "object": "chat.completion.chunk",
-                            #   "created": 12345,
-                            #   "model": "...",
-                            #   "choices": [
-                            #       {
-                            #           "delta": { "content": "some text..." },
-                            #           ...
-                            #       }
-                            #   ]
-                            # }
-                            if "choices" in chunk and chunk["choices"]:
-                                delta = chunk["choices"][0].get("delta", {})
-                                content = delta.get("content")
-                                if content:
-                                    try:
-                                        yield content.encode("utf-8")
-                                    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
-                                        logger.info("Client disconnected during yield (OpenAI): %s", str(e))
-                                        break
-                    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
-                        logger.info("Client disconnected during streaming (OpenAI): %s", str(e))
-                    except Exception as e:
-                        logger.exception("Unexpected error during OpenAI streaming: %s", str(e))
-                    # No explicit final close needed for an async generator, but you could do so if desired
-                return StreamingResponse(streamer(), media_type="text/plain")
+                def save_conversation():
+                    messages = chat_req.messages + [
+                        ChatMessage(role="assistant", content="".join(full_response))
+                    ]
+                    if conversation_id:
+                        update_conversation(conversation_id, messages)
+
+                if conversation_id:
+                    background_tasks.add_task(save_conversation)
+
+                headers = {"X-Conversation-ID": conversation_id} if conversation_id else {}
+                return StreamingResponse(streamer(), media_type="text/plain", headers=headers)
 
             else:
                 # Non-streaming
                 response = await interface.send_chat_nonstreaming(conversation_history)
-                # `response` should be a dict with the full completion
-                # Convert it to text as needed
-                if "choices" in response and len(response["choices"]) > 0:
-                    # Typical OpenAI format: response["choices"][0]["message"]["content"]
-                    content_text = response["choices"][0]["message"]["content"]
-                    return PlainTextResponse(content_text)
-                else:
-                    # Fallback if something unexpected:
-                    return PlainTextResponse(str(response))
+                # typical openai response => response["choices"][0]["message"]["content"]
+                content = response["choices"][0]["message"]["content"] if "choices" in response else str(response)
 
-        # ---- Fallback for unknown interface types ----
-        else:
-            if images:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Model '{chat_req.model}' does not support image inputs."
-                )
-            conversation_history = [m.dict() for m in chat_req.messages]
-            if chat_req.stream:
-                # If there's a custom fallback interface...
-                stream_generator = interface.send_chat_streaming(conversation_history)
-                async def streamer():
-                    async for chunk in stream_generator:
-                        if chunk.choices and chunk.choices[0].delta:
-                            delta = chunk.choices[0].delta
-                            if delta.content:
-                                try:
-                                    yield delta.content.encode("utf-8")
-                                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
-                                    logger.info("Client disconnected during yield (Fallback): %s", str(e))
-                                    break
-                return StreamingResponse(streamer(), media_type="text/plain")
-            else:
-                response = interface.send_chat_nonstreaming(conversation_history)
-                return PlainTextResponse(response)
+                messages = chat_req.messages + [ChatMessage(role="assistant", content=content)]
+                if conversation_id:
+                    update_conversation(conversation_id, messages)
+
+                headers = {"X-Conversation-ID": conversation_id} if conversation_id else {}
+                return PlainTextResponse(content, headers=headers)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/vision")
-async def vision(
-    prompt: str = Form(...),
-    image: UploadFile = File(...),
-    model: str = Form("llava")
-):
-    try:
-        content = await image.read()
-        image_base64 = base64.b64encode(content).decode("utf-8")
-        interface = AsyncOllamaInterface(model=model)
-        vision_response = await interface.send_vision(prompt=prompt, images=[image_base64])
-        return JSONResponse(content=vision_response)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
+# -----------------------
+# Static File Endpoints
+# -----------------------
 @app.get("/", response_class=FileResponse)
 async def get_index():
     return FileResponse("static/index.html")
