@@ -6,440 +6,874 @@
   <title>Internal LLM</title>
   <link rel="icon" href="/favicon.ico" type="image/x-icon" />
   
-  <!-- Prism.js for syntax highlighting -->
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.24.1/themes/prism-dark.min.css" rel="stylesheet" />
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.24.1/prism.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.24.1/components/prism-python.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.24.1/components/prism-javascript.min.js"></script>
+  <!-- Prism.js for syntax highlighting with more languages -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
   
   <style>
-    /* ------------------------------
-       Global & Modernized UI Styles 
-       ------------------------------ */
-    body {
-      background-color: #0d1117;
-      color: #c9d1d9;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+    /* ----------------------------------
+       Modern UI Variables & Reset 
+       ---------------------------------- */
+    :root {
+      --bg-primary: #10151c;
+      --bg-secondary: #171f2a;
+      --bg-tertiary: #232f3e;
+      --text-primary: #e6edf3;
+      --text-secondary: #8b949e;
+      --accent-primary: #3498db;
+      --accent-secondary: #2980b9;
+      --accent-success: #27ae60;
+      --accent-danger: #e74c3c;
+      --border-color: rgba(240, 246, 252, 0.1);
+      --border-radius: 8px;
+      --shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      --transition: all 0.2s ease-in-out;
+      --user-bubble: #2563eb;
+      --bot-bubble: #1e293b;
+      --thinking-bg: #2a3441;
+      --code-bg: #0d1117;
+    }
+
+    * {
+      box-sizing: border-box;
       margin: 0;
       padding: 0;
     }
-    .container {
-      max-width: 90%;
-      margin: 20px auto;
-      padding: 20px;
-      position: relative;
+
+    body {
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+      line-height: 1.6;
+      height: 100vh;
+      overflow: hidden;
     }
+
+    /* ----------------------------------
+       Layout 
+       ---------------------------------- */
+    .app-container {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      grid-template-rows: auto 1fr auto;
+      grid-template-areas:
+        "sidebar header"
+        "sidebar chat"
+        "sidebar input";
+      height: 100vh;
+    }
+
+    /* ----------------------------------
+       Header 
+       ---------------------------------- */
     .header {
+      grid-area: header;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 20px;
+      padding: 16px 24px;
+      background-color: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-color);
+      z-index: 10;
     }
+
     .header h1 {
-      margin: 0;
+      font-size: 1.5rem;
+      font-weight: 600;
     }
 
-    /* ------------------------------
-       Toggle Button (always visible)
-       ------------------------------ */
-    #toggle-sidebar-button {
-      position: fixed;
-      top: 20px;
-      left: 20px;
-      background: none;
-      border: none;
-      color: #c9d1d9;
-      font-size: 24px;
-      cursor: pointer;
-      z-index: 2001; /* Above the sidebar */
-    }
-    #toggle-sidebar-button:hover {
-      color: #ffffff;
+    .header-actions {
+      display: flex;
+      gap: 12px;
     }
 
-    /* ------------------------------
+    .user-info {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* ----------------------------------
        Sidebar Styles
-       ------------------------------ */
+       ---------------------------------- */
     .sidebar {
-      position: fixed;
-      top: 0;
-      left: -250px;       /* Hide offscreen by default */
-      width: 250px;
-      height: 100%;
-      background-color: #161b22;
-      transition: left 0.3s; /* animate sliding in/out */
+      grid-area: sidebar;
+      width: 280px;
+      background-color: var(--bg-secondary);
+      border-right: 1px solid var(--border-color);
       overflow-y: auto;
-      padding: 20px;
-      box-shadow: 2px 0 5px rgba(0,0,0,0.5);
-      z-index: 1000;
-    }
-    .sidebar.open {
-      left: 0;            /* Slide in when "open" class is applied */
-    }
-    #conversation-list .conversation-preview {
-      cursor: pointer;
-      padding: 10px;
-      border-bottom: 1px solid #30363d;
-    }
-    #conversation-list .conversation-preview:hover {
-      background-color: #21262d;
-    }
-    #not-signed-in-message {
-      color: #8b949e;
-      text-align: center;
-      margin-top: 50px;
-    }
-
-    /* ------------------------------
-       Chat Window & Message Styles
-       ------------------------------ */
-    .chat-window {
-      background-color: #161b22;
-      border-radius: 8px;
-      padding: 20px;
-      height: 70vh; /* 70% of viewport height */
-      overflow-y: auto;
-      margin-bottom: 20px;
-    }
-    .chat-message {
-      margin-bottom: 10px;
-      padding: 8px 12px;
-      border-radius: 4px;
-      max-width: 70%;
-      word-wrap: break-word;
-    }
-    .chat-message.user {
-      background-color: #238636;
-      color: #fff;
-      display: inline-block;
-      text-align: left;
-      white-space: pre-wrap;
-    }
-    .chat-message.bot {
-      background-color: #21262d;
-      color: #c9d1d9;
-      margin-right: auto;
-      text-align: left;
-    }
-    /* Styling for images appended to a user message */
-    .chat-message.user .user-images {
-      margin-top: 10px;
-    }
-    .chat-message.user .user-images img {
-      max-width: 200px;
-      margin-right: 10px;
-      border: 1px solid #30363d;
-      border-radius: 4px;
-    }
-
-    .input-section {
+      transition: var(--transition);
       display: flex;
       flex-direction: column;
-      gap: 10px;
-      position: relative;
     }
-    /* Image preview container styling */
+
+    .sidebar-header {
+      padding: 16px;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    #conversation-list {
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    .conversation-preview {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-color);
+      cursor: pointer;
+      transition: var(--transition);
+    }
+
+    .conversation-preview:hover {
+      background-color: var(--bg-tertiary);
+    }
+
+    .conversation-preview p {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-weight: 500;
+    }
+
+    .conversation-preview small {
+      color: var(--text-secondary);
+      font-size: 0.8rem;
+    }
+
+    #not-signed-in-message {
+      padding: 24px 16px;
+      color: var(--text-secondary);
+      text-align: center;
+    }
+
+    /* Collapsed sidebar */
+    .sidebar-collapsed .sidebar {
+      width: 60px;
+      overflow: hidden;
+    }
+
+    .sidebar-collapsed .sidebar-header span,
+    .sidebar-collapsed #conversation-list,
+    .sidebar-collapsed #not-signed-in-message {
+      display: none;
+    }
+
+    #toggle-sidebar-button {
+      background: none;
+      border: none;
+      color: var(--text-primary);
+      cursor: pointer;
+      font-size: 1.2rem;
+    }
+
+    /* ----------------------------------
+       Chat Window 
+       ---------------------------------- */
+    .chat-container {
+      grid-area: chat;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    .chat-window {
+      flex: 1;
+      padding: 16px 24px;
+      overflow-y: auto;
+      scroll-behavior: smooth;
+    }
+
+    .message-group {
+      display: flex;
+      margin-bottom: 24px;
+      max-width: 88%;
+    }
+
+    .user-avatar, .bot-avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      margin-right: 12px;
+      background-color: var(--accent-primary);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-weight: bold;
+      flex-shrink: 0;
+    }
+
+    .bot-avatar {
+      background-color: var(--accent-secondary);
+    }
+
+    .messages {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-width: calc(100% - 48px);
+    }
+
+    .message-group.bot {
+      align-self: flex-start;
+    }
+
+    .message-group.user {
+      flex-direction: row-reverse;
+      align-self: flex-end;
+    }
+
+    .message-group.user .user-avatar {
+      margin-right: 0;
+      margin-left: 12px;
+    }
+
+    .message-group.user .messages {
+      align-items: flex-end;
+    }
+
+    .chat-message {
+      padding: 10px 14px;
+      border-radius: 18px;
+      max-width: 100%;
+      word-wrap: break-word;
+    }
+
+    .chat-message.user {
+      background-color: var(--user-bubble);
+      color: white;
+      border-top-right-radius: 4px;
+    }
+
+    .chat-message.bot {
+      background-color: var(--bot-bubble);
+      color: var(--text-primary);
+      border-top-left-radius: 4px;
+    }
+
+    /* Thinking block */
+    .bot-think {
+      background-color: var(--thinking-bg);
+      border-left: 3px solid var(--accent-primary);
+      padding: 12px;
+      margin: 12px 0;
+      border-radius: var(--border-radius);
+    }
+
+    .thinking-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+
+    .thinking-indicator:hover {
+      color: var(--text-primary);
+    }
+
+    .thinking-indicator::before {
+      content: '';
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238b949e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83'/%3E%3C/svg%3E");
+      background-size: contain;
+      animation: spin 1.5s linear infinite;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .think-content {
+      margin-top: 12px;
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      padding: 8px;
+      background-color: rgba(0, 0, 0, 0.1);
+      border-radius: 4px;
+      white-space: pre-wrap;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+
+    /* User images */
+    .user-images {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .user-images img {
+      max-width: 200px;
+      max-height: 200px;
+      border-radius: 6px;
+      border: 1px solid var(--border-color);
+      object-fit: cover;
+    }
+
+    /* ----------------------------------
+       Code Block Styles 
+       ---------------------------------- */
+    .code-block {
+      position: relative;
+      margin: 12px 0;
+      border-radius: var(--border-radius);
+      overflow: hidden;
+      background-color: var(--code-bg);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    }
+
+    .code-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 14px;
+      background-color: rgba(0, 0, 0, 0.3);
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .code-lang-tag {
+      background-color: rgba(255, 255, 255, 0.1);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      text-transform: lowercase;
+    }
+
+    .copy-button {
+      background: none;
+      border: none;
+      color: var(--text-secondary);
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 4px;
+      transition: var(--transition);
+      font-size: 0.9rem;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .copy-button:hover {
+      background-color: rgba(255, 255, 255, 0.1);
+      color: var(--text-primary);
+    }
+
+    .code-block pre {
+      margin: 0;
+      padding: 14px;
+      overflow-x: auto;
+      font-family: 'Fira Code', Consolas, Monaco, 'Andale Mono', monospace;
+      font-size: 0.9rem;
+    }
+
+    .code-block code {
+      font-family: inherit;
+      background: none;
+      padding: 0;
+      border-radius: 0;
+      color: inherit;
+      tab-size: 2;
+    }
+
+    /* Inline code */
+    p code, li code {
+      background-color: rgba(255, 255, 255, 0.1);
+      padding: 2px 4px;
+      border-radius: 4px;
+      font-family: 'Fira Code', Consolas, Monaco, 'Andale Mono', monospace;
+      font-size: 0.9em;
+    }
+
+    /* ----------------------------------
+       Input Section 
+       ---------------------------------- */
+    .input-container {
+      grid-area: input;
+      padding: 16px 24px;
+      background-color: var(--bg-secondary);
+      border-top: 1px solid var(--border-color);
+    }
+
+    .input-options {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .model-select-container {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #model-select {
+      background-color: var(--bg-tertiary);
+      color: var(--text-primary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--border-radius);
+      padding: 8px 12px;
+      font-size: 0.9rem;
+      appearance: none;
+      cursor: pointer;
+    }
+
+    /* Image preview */
     #image-preview-container {
       display: flex;
       flex-wrap: wrap;
       gap: 10px;
-      margin-bottom: 10px;
+      margin-bottom: 12px;
     }
-    #image-preview-container .image-preview {
+
+    .image-preview {
       position: relative;
-      width: 100px;
-      height: 100px;
+      width: 80px;
+      height: 80px;
+      border-radius: 6px;
       overflow: hidden;
-      border: 1px solid #30363d;
-      border-radius: 4px;
+      border: 1px solid var(--border-color);
     }
-    #image-preview-container .image-preview img {
+
+    .image-preview img {
       width: 100%;
       height: 100%;
       object-fit: cover;
     }
-    #image-preview-container .image-preview .remove-image {
+
+    .remove-image {
       position: absolute;
-      top: 0;
-      right: 0;
-      background-color: rgba(0,0,0,0.7);
+      top: 4px;
+      right: 4px;
+      background-color: rgba(0, 0, 0, 0.6);
       color: white;
       border: none;
       cursor: pointer;
-      font-size: 14px;
-      display: none;
-      padding: 0 4px;
-    }
-    #image-preview-container .image-preview:hover .remove-image {
-      display: block;
-    }
-    .model-select-container {
+      font-size: 12px;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
       display: flex;
       align-items: center;
-      gap: 10px;
+      justify-content: center;
     }
-    select {
-      background-color: #161b22;
-      color: #c9d1d9;
-      border-radius: 4px;
-      border: 1px solid #30363d;
-      padding: 8px;
+
+    /* Input with actions */
+    .input-with-actions {
+      display: flex;
+      gap: 12px;
+      align-items: flex-end;
     }
-    textarea {
+
+    .input-wrapper {
+      position: relative;
       flex: 1;
-      resize: vertical;
-      min-height: 60px;
-      max-height: 200px;
-      padding: 10px;
-      border: none;
-      border-radius: 4px;
-      font-size: 1rem;
-      background-color: #161b22;
-      color: #c9d1d9;
     }
-    button {
-      padding: 10px 20px;
-      border: none;
-      border-radius: 4px;
-      background-color: #238636;
-      color: #fff;
-      cursor: pointer;
+
+    #user-input {
+      width: 100%;
+      resize: none;
+      min-height: 56px;
+      max-height: 200px;
+      padding: 16px 16px;
+      border: 1px solid var(--border-color);
+      border-radius: var(--border-radius);
+      background-color: var(--bg-tertiary);
+      color: var(--text-primary);
+      font-family: inherit;
       font-size: 1rem;
+      line-height: 1.5;
+      transition: var(--transition);
+      outline: none;
+    }
+
+    #user-input:focus {
+      border-color: var(--accent-primary);
+      box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.3);
+    }
+
+    #send-button {
+      background-color: var(--accent-primary);
+      color: white;
+      border: none;
+      border-radius: var(--border-radius);
+      padding: 0 20px;
+      height: 56px;
+      font-size: 1rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: var(--transition);
+      display: flex;
+      align-items: center;
+      justify-content: center;
       white-space: nowrap;
     }
-    button:hover {
-      background-color: #2ea043;
+
+    #send-button:hover {
+      background-color: var(--accent-secondary);
     }
-    /* New Chat Button styling */
-    #new-chat-button {
+
+    /* ----------------------------------
+       Buttons & Inputs 
+       ---------------------------------- */
+    button {
+      cursor: pointer;
+      font-family: inherit;
+      transition: var(--transition);
+    }
+
+    .button-primary {
+      background-color: var(--accent-primary);
+      color: white;
+      border: none;
+      border-radius: var(--border-radius);
       padding: 8px 16px;
-      border: none;
-      border-radius: 4px;
-      background-color: #238636;
-      color: #fff;
-      cursor: pointer;
-      font-size: 1rem;
-    }
-    #new-chat-button:hover {
-      background-color: #2ea043;
-    }
-
-    /* ------------------------------
-       Thinking Block Styles
-       ------------------------------ */
-    .bot-think {
-      background-color: #2c2c2c;
-      color: #8b949e;
-      border-left: 3px solid #30363d;
-      padding: 8px 12px;
-      margin: 10px 0;
-      border-radius: 4px;
-    }
-    .thinking-indicator {
-      font-style: italic;
-      animation: flashing 1s infinite;
-      cursor: pointer;
-    }
-    @keyframes flashing {
-      0% { opacity: 1; }
-      50% { opacity: 0.5; }
-      100% { opacity: 1; }
-    }
-    .think-content {
-      margin-top: 5px;
       font-size: 0.9rem;
-      color: #8b949e;
-      display: none;
-      white-space: pre-wrap;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
     }
 
-    /* ------------------------------
-       Code Block Styles (Prism.js)
-       ------------------------------ */
-    .code-block {
-      background-color: #282c34;
-      padding: 15px;
-      border-radius: 8px;
-      margin: 10px 0;
-      font-family: monospace;
-      overflow-x: auto;
-      position: relative;
-    }
-    .code-block pre {
-      margin: 0;
-      white-space: pre-wrap;
-      word-wrap: break-word;
-    }
-    .copy-button {
-      position: absolute;
-      top: 5px;
-      right: 5px;
-      padding: 5px 10px;
-      background-color: #61dafb;
-      border: none;
-      cursor: pointer;
-      color: #282c34;
-      border-radius: 4px;
-      font-size: 0.8rem;
-      z-index: 1;
-    }
-    .copy-button:hover {
-      background-color: #4fb0e6;
-    }
-    code {
-      background-color: #2c2c34;
-      padding: 2px 4px;
-      border-radius: 4px;
-      font-family: monospace;
-      color: #fff;
+    .button-primary:hover {
+      background-color: var(--accent-secondary);
     }
 
-    /* ------------------------------
-       Modal Styles (Authentication)
-       ------------------------------ */
+    .button-secondary {
+      background-color: transparent;
+      color: var(--text-primary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--border-radius);
+      padding: 8px 16px;
+      font-size: 0.9rem;
+      font-weight: 500;
+    }
+
+    .button-secondary:hover {
+      background-color: rgba(255, 255, 255, 0.05);
+    }
+
+    /* ----------------------------------
+       Modals 
+       ---------------------------------- */
     .modal {
       position: fixed;
-      z-index: 2000;
+      z-index: 1000;
       left: 0;
       top: 0;
       width: 100%;
       height: 100%;
-      overflow: auto;
-      background-color: rgba(0,0,0,0.4);
+      background-color: rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      visibility: hidden;
+      transition: var(--transition);
     }
+
+    .modal.active {
+      opacity: 1;
+      visibility: visible;
+    }
+
     .modal-content {
-      background-color: #161b22;
-      margin: 15% auto;
-      padding: 20px;
-      border: 1px solid #30363d;
-      width: 300px;
-      border-radius: 8px;
+      background-color: var(--bg-secondary);
+      border-radius: var(--border-radius);
+      width: 100%;
+      max-width: 400px;
+      box-shadow: var(--shadow);
+      position: relative;
+      transform: translateY(-20px);
+      transition: var(--transition);
     }
+
+    .modal.active .modal-content {
+      transform: translateY(0);
+    }
+
+    .modal-header {
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .modal-body {
+      padding: 24px;
+    }
+
     .close-modal {
-      color: #8b949e;
-      float: right;
-      font-size: 28px;
-      font-weight: bold;
+      background: none;
+      border: none;
+      color: var(--text-secondary);
+      font-size: 1.5rem;
       cursor: pointer;
+      line-height: 1;
     }
-    .close-modal:hover,
-    .close-modal:focus {
-      color: #c9d1d9;
-      text-decoration: none;
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    .form-group label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+    }
+
+    .form-control {
+      width: 100%;
+      padding: 12px 16px;
+      border: 1px solid var(--border-color);
+      border-radius: var(--border-radius);
+      background-color: var(--bg-tertiary);
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 1rem;
+    }
+
+    .form-control:focus {
+      outline: none;
+      border-color: var(--accent-primary);
+    }
+
+    /* ----------------------------------
+       Media Queries 
+       ---------------------------------- */
+    @media (max-width: 768px) {
+      .app-container {
+        grid-template-columns: 1fr;
+        grid-template-areas:
+          "header"
+          "chat"
+          "input";
+      }
+
+      .sidebar {
+        position: fixed;
+        left: -280px;
+        top: 0;
+        bottom: 0;
+        z-index: 100;
+        box-shadow: var(--shadow);
+      }
+
+      .sidebar.open {
+        left: 0;
+      }
+
+      #toggle-sidebar-button {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        z-index: 101;
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        background-color: var(--accent-primary);
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: var(--shadow);
+      }
+
+      .message-group {
+        max-width: 95%;
+      }
     }
   </style>
 </head>
 <body>
-
-  <!-- Toggle button (ALWAYS visible on the left edge) -->
-  <button id="toggle-sidebar-button">≡</button>
-
-  <!-- Sidebar for previous conversations (slides in/out) -->
-  <div class="sidebar" id="sidebar">
-    <div id="conversation-list"></div>
-    <div id="not-signed-in-message" style="display: none;">
-      You are currently not signed in. Sign in to view previous chats and resume.
-    </div>
-  </div>
-
-  <div class="container">
-    <div class="header">
-      <h1>Internal LLM Chat</h1>
-      <div id="auth-buttons"></div>
-      <div>
-        <button id="new-chat-button">New Chat</button>
-        <button id="export-chat-button" style="display: none;">Export Conversation</button>
-        <!-- <button id="import-chat-button">Import Conversation</button> -->
+  <div class="app-container">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <span>Conversations</span>
+        <button id="new-chat-button" class="button-secondary">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
       </div>
+      <div id="conversation-list"></div>
+      <div id="not-signed-in-message" style="display: none;">
+        You are not signed in. Sign in to view and save your conversations.
+      </div>
+    </aside>
+
+    <!-- Main Header -->
+    <header class="header">
+      <div class="header-left">
+        <button id="toggle-sidebar-button">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+        <h1>Internal LLM Chat</h1>
+      </div>
+      <div class="header-actions">
+        <div id="auth-buttons"></div>
+        <button id="export-chat-button" class="button-secondary" style="display: none;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Export
+        </button>
+      </div>
+    </header>
+
+    <!-- Chat Container -->
+    <div class="chat-container">
+      <div class="chat-window" id="chat-window"></div>
     </div>
 
-    <div class="chat-window" id="chat-window"></div>
-
-    <div class="input-section">
-      <!-- Image preview container -->
+    <!-- Input Container -->
+    <div class="input-container">
+      <div class="input-options">
+        <div class="model-select-container">
+          <label for="model-select">Model:</label>
+          <select id="model-select"></select>
+        </div>
+      </div>
+      
+      <!-- Image Preview Area -->
       <div id="image-preview-container"></div>
-
-      <div class="model-select-container">
-        <label for="model-select">Choose Model:</label>
-        <select id="model-select"></select>
-      </div>
-
-      <div style="display: flex; gap: 10px;">
-        <textarea id="user-input" placeholder="Type here (Shift+Enter for new line)..."></textarea>
+      
+      <div class="input-with-actions">
+        <div class="input-wrapper">
+          <textarea id="user-input" placeholder="Type your message..." rows="1"></textarea>
+        </div>
         <button id="send-button">Send</button>
       </div>
     </div>
   </div>
 
+  <!-- Auth Modals -->
+  <div id="signup-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Create Account</h2>
+        <button class="close-modal" data-modal="signup-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="signup-form">
+          <div class="form-group">
+            <label for="signup-username">Username</label>
+            <input type="text" id="signup-username" class="form-control" required>
+          </div>
+          <div class="form-group">
+            <label for="signup-password">Password</label>
+            <input type="password" id="signup-password" class="form-control" required>
+          </div>
+          <button type="submit" class="button-primary" style="width: 100%;">Sign Up</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div id="login-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Sign In</h2>
+        <button class="close-modal" data-modal="login-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="login-form">
+          <div class="form-group">
+            <label for="login-username">Username</label>
+            <input type="text" id="login-username" class="form-control" required>
+          </div>
+          <div class="form-group">
+            <label for="login-password">Password</label>
+            <input type="password" id="login-password" class="form-control" required>
+          </div>
+          <button type="submit" class="button-primary" style="width: 100%;">Sign In</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
   <!-- Hidden file input for importing JSON -->
-  <input type="file" id="import-file-input" accept=".json" style="display:none;" />
-
-  <!-- Authentication Modals -->
-  <!-- Signup Modal -->
-  <div id="signup-modal" class="modal" style="display: none;">
-    <div class="modal-content">
-      <span class="close-modal" onclick="closeModal('signup-modal')">&times;</span>
-      <h2>Sign Up</h2>
-      <form id="signup-form">
-        <input type="text" id="signup-username" placeholder="Username" required /><br/><br/>
-        <input type="password" id="signup-password" placeholder="Password" required /><br/><br/>
-        <button type="submit">Sign Up</button>
-      </form>
-    </div>
-  </div>
-
-  <!-- Login Modal -->
-  <div id="login-modal" class="modal" style="display: none;">
-    <div class="modal-content">
-      <span class="close-modal" onclick="closeModal('login-modal')">&times;</span>
-      <h2>Sign In</h2>
-      <form id="login-form">
-        <input type="text" id="login-username" placeholder="Username" required /><br/><br/>
-        <input type="password" id="login-password" placeholder="Password" required /><br/><br/>
-        <button type="submit">Sign In</button>
-      </form>
-    </div>
-  </div>
-
+  <input type="file" id="import-file-input" accept=".json" style="display:none;">
+  
   <script>
     // -----------------------------------------------------
     // GLOBAL VARIABLES & STATE
     // -----------------------------------------------------
-    const chatWindow            = document.getElementById('chat-window');
-    const userInput             = document.getElementById('user-input');
-    const sendButton            = document.getElementById('send-button');
-    const modelSelect           = document.getElementById('model-select');
-    const newChatButton         = document.getElementById('new-chat-button');
-    const exportChatButton      = document.getElementById('export-chat-button');
-    const importChatButton      = document.getElementById('import-chat-button');
-    const importFileInput       = document.getElementById('import-file-input');
+    const chatWindow = document.getElementById('chat-window');
+    const userInput = document.getElementById('user-input');
+    const sendButton = document.getElementById('send-button');
+    const modelSelect = document.getElementById('model-select');
+    const newChatButton = document.getElementById('new-chat-button');
+    const exportChatButton = document.getElementById('export-chat-button');
+    const importFileInput = document.getElementById('import-file-input');
     const imagePreviewContainer = document.getElementById('image-preview-container');
+    const sidebar = document.getElementById('sidebar');
+    const toggleSidebarButton = document.getElementById('toggle-sidebar-button');
 
-    // Sidebar & toggle button
-    const sidebar               = document.getElementById('sidebar');
-    const toggleSidebarButton   = document.getElementById('toggle-sidebar-button');
+    let conversation = [];
+    let currentModel = null;
+    let currentConversationId = null;
+    let leftoverLine = "";
+    let currentBotMessageGroup = null;
+    let currentBotMessageContainer = null;
+    let currentPartialTextElement = null;
+    let inCodeBlock = false;
+    let currentCodeElement = null;
+    let codeLines = [];
+    let currentCodeBlockContainer = null;
+    let thinkBlocks = [];
+    let currentThinkBlock = null;
+    let inThinkBlock = false;
+    let pastedImages = [];
+    let nextImageId = 0;
+    let activeAbortControllers = [];
+    let currentRequestController = null;
+    
+    // Code block detection patterns
+    const codeFencePatterns = [
+      /^```(?:([a-zA-Z0-9_+\-.]+))?$/,  // Triple backticks with optional language
+      /^~~~(?:([a-zA-Z0-9_+\-.]+))?$/,  // Triple tildes with optional language
+      /^-{3,}$/,                       // Three or more hyphens
+      /^={3,}$/,                       // Three or more equals signs
+      /^_{3,}$/                        // Three or more underscores
+    ];
 
-    let conversation            = [];
-    let currentModel            = null;
-    let currentConversationId   = null; // For tracking conversation IDs
-
-    let leftoverLine            = "";
-    let currentBotMessageContainer  = null;
-    let currentPartialTextElement   = null;
-    let inCodeBlock             = false;
-    let currentCodeElement      = null;
-    let codeLines               = [];
-    let currentCodeBlockContainer  = null;
-
-    let thinkBlocks             = [];
-    let currentThinkBlock       = null;
-    let inThinkBlock            = false;
-
-    let pastedImages            = [];
-    let nextImageId             = 0;
-    const dashedLineRegex       = /^-{20,}$/;
-    let activeAbortControllers  = [];
-    let currentRequestController= null;
+    // Common language name mappings for better syntax highlighting
+    const languageAliases = {
+      'js': 'javascript',
+      'ts': 'typescript',
+      'py': 'python',
+      'rb': 'ruby',
+      'sh': 'bash',
+      'c#': 'csharp',
+      'c++': 'cpp',
+      'html+php': 'php',
+      'md': 'markdown',
+      'rust': 'rust',
+      'go': 'go',
+      'cs': 'csharp',
+      'yml': 'yaml',
+      'json': 'json',
+      'jsx': 'jsx',
+      'tsx': 'tsx',
+      'css': 'css',
+      'sass': 'sass',
+      'scss': 'scss',
+      'sql': 'sql',
+      'shell': 'bash'
+    };
 
     // -----------------------------------------------------
     // ON LOAD: FETCH MODELS & INITIAL AUTH/SIDEBAR SETUP
@@ -447,9 +881,23 @@
     window.onload = async function() {
       await fetchAndPopulateOllamaModels();
       await fetchAndPopulateOpenaiModels();
-      setPreferredModel();  // Set our default based on preference order
+      setPreferredModel();
       updateAuthButtons();
       fetchConversations();
+      
+      // Setup modal listeners
+      document.querySelectorAll('.close-modal').forEach(button => {
+        button.addEventListener('click', () => {
+          const modalId = button.dataset.modal;
+          document.getElementById(modalId).classList.remove('active');
+        });
+      });
+
+      // Make textarea auto-resize
+      userInput.addEventListener('input', function() {
+        this.style.height = 'auto';
+        this.style.height = (this.scrollHeight) + 'px';
+      });
     };
 
     // -----------------------------------------------------
@@ -532,6 +980,7 @@
     function scrollChatToBottom() {
       chatWindow.scrollTop = chatWindow.scrollHeight;
     }
+    
     function scrollChatToBottomIfNeeded() {
       const tolerance = 50;
       const isNearBottom = chatWindow.scrollHeight - chatWindow.scrollTop - chatWindow.clientHeight <= tolerance;
@@ -539,6 +988,7 @@
         chatWindow.scrollTop = chatWindow.scrollHeight;
       }
     }
+    
     function escapeHTML(str) {
       return str
         .replace(/&/g, "&amp;")
@@ -547,111 +997,220 @@
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#039;");
     }
-    function formatTextWithMarkup(rawText) {
-      let text = escapeHTML(rawText);
-      text = text.replace(/\*\*(.+?)\*\*/g, (_, p1) => `<strong>${p1}</strong>`);
-      text = text.replace(/`([^`]+)`/g, (_, p1) => `<code>${p1}</code>`);
-      return text;
+    
+    function formatTextWithMarkup(text) {
+      if (!text) return '';
+      
+      let escaped = escapeHTML(text);
+      
+      // Handle bold text with **
+      escaped = escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      
+      // Handle italic text with *
+      escaped = escaped.replace(/\*([^\*]+)\*/g, '<em>$1</em>');
+      
+      // Handle inline code with `
+      escaped = escaped.replace(/`([^`]+)`/g, '<code>$1</code>');
+      
+      // Handle links [text](url)
+      escaped = escaped.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+      
+      // Convert line breaks to <br>
+      escaped = escaped.replace(/\n/g, '<br>');
+      
+      return escaped;
     }
-    function formatUserMessage(text) {
-      if (text.indexOf('```') !== -1) {
-        const segments = text.split(/```/);
-        let result = "";
-        segments.forEach((segment, index) => {
-          if (index % 2 === 0) {
-            // Normal text
-            let processed = escapeHTML(segment);
-            processed = processed.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-            processed = processed.replace(/`([^`]+)`/g, "<code>$1</code>");
-            result += processed;
-          } else {
-            // Code fence
-            result += "<pre><code>" + escapeHTML(segment) + "</code></pre>";
-          }
-        });
-        return result;
-      } else {
-        let processed = escapeHTML(text);
-        processed = processed.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-        processed = processed.replace(/`([^`]+)`/g, "<code>$1</code>");
-        return processed;
+
+    function detectLanguage(code, declaredLang) {
+      if (declaredLang) {
+        // Check if we have an alias for this language
+        return languageAliases[declaredLang.toLowerCase()] || declaredLang.toLowerCase();
       }
+      
+      // Simple language detection heuristics
+      const firstLine = code.split('\n')[0].trim();
+      
+      // Python 
+      if (code.includes('def ') && code.includes(':') || 
+          code.includes('import ') && !code.includes(';') || 
+          firstLine.startsWith('#!/usr/bin/env python')) {
+        return 'python';
+      }
+      
+      // JavaScript
+      if (code.includes('function ') || 
+          code.includes('=>') || 
+          code.includes('const ') || 
+          code.includes('let ') ||
+          firstLine.includes('use strict')) {
+        if (code.includes('<jsx') || code.includes('React')) {
+          return 'jsx';
+        }
+        return 'javascript';
+      }
+      
+      // HTML
+      if (code.includes('<html') || 
+          code.includes('<!DOCTYPE') || 
+          (code.includes('<div') && code.includes('</div>'))) {
+        return 'html';
+      }
+      
+      // CSS
+      if (code.includes('{') && code.includes('}') && 
+          (code.includes('margin:') || code.includes('padding:') || code.includes('color:'))) {
+        return 'css';
+      }
+      
+      // SQL
+      if (code.toLowerCase().includes('select ') && 
+          (code.toLowerCase().includes(' from ') || code.toLowerCase().includes(' where '))) {
+        return 'sql';
+      }
+      
+      // JSON
+      if ((code.trim().startsWith('{') && code.trim().endsWith('}')) || 
+          (code.trim().startsWith('[') && code.trim().endsWith(']'))) {
+        try {
+          JSON.parse(code);
+          return 'json';
+        } catch (e) {
+          // Not valid JSON
+        }
+      }
+      
+      // Bash/Shell
+      if (firstLine.startsWith('#!/bin/') || 
+          (code.includes('echo ') && code.includes('$'))) {
+        return 'bash';
+      }
+      
+      // If we can't detect, default to plaintext
+      return '';
     }
-    function appendMessage(sender, content) {
+
+    function createMessageGroup(sender) {
+      const group = document.createElement('div');
+      group.classList.add('message-group', sender);
+      
+      const avatar = document.createElement('div');
+      avatar.classList.add(sender === 'user' ? 'user-avatar' : 'bot-avatar');
+      avatar.textContent = sender === 'user' ? 'U' : 'AI';
+      
+      const messages = document.createElement('div');
+      messages.classList.add('messages');
+      
+      group.appendChild(avatar);
+      group.appendChild(messages);
+      chatWindow.appendChild(group);
+      
+      return { group, messages };
+    }
+
+    function appendUserMessage(content, images = []) {
+      const { group, messages } = createMessageGroup('user');
+      
       const msg = document.createElement('div');
-      msg.classList.add('chat-message', sender);
-      if (sender === 'user') {
-        msg.innerHTML = formatUserMessage(content);
-      } else {
-        msg.textContent = content;
+      msg.classList.add('chat-message', 'user');
+      msg.innerHTML = formatTextWithMarkup(content);
+      messages.appendChild(msg);
+      
+      // Add images if any
+      if (images && images.length > 0) {
+        const imagesDiv = document.createElement('div');
+        imagesDiv.classList.add('user-images');
+        
+        images.forEach(base64Data => {
+          const imgEl = document.createElement('img');
+          imgEl.src = base64Data;
+          imagesDiv.appendChild(imgEl);
+        });
+        
+        messages.appendChild(imagesDiv);
       }
-      chatWindow.appendChild(msg);
+      
+      scrollChatToBottom();
+      return group;
+    }
+
+    function createBotMessageGroup() {
+      const { group, messages } = createMessageGroup('bot');
+      currentBotMessageGroup = group;
+      return messages;
+    }
+
+    function appendTextToBotMessage(messages, text) {
+      const msg = document.createElement('div');
+      msg.classList.add('chat-message', 'bot');
+      msg.innerHTML = formatTextWithMarkup(text);
+      messages.appendChild(msg);
+      currentBotMessageContainer = msg;
+      currentPartialTextElement = null;
       scrollChatToBottomIfNeeded();
       return msg;
     }
-    function createBotMessageContainer() {
-      const msgDiv = document.createElement('div');
-      msgDiv.classList.add('chat-message', 'bot');
-      chatWindow.appendChild(msgDiv);
-      scrollChatToBottom();
-      currentPartialTextElement = null;
-      return msgDiv;
-    }
-    function appendNormalText(container, text) {
-      const el = document.createElement('div');
-      el.innerHTML = formatTextWithMarkup(text);
-      container.appendChild(el);
-      currentPartialTextElement = el;
-      scrollChatToBottomIfNeeded();
-    }
-    function updatePartialText(container, text) {
+
+    function updatePartialText(text) {
+      if (!currentBotMessageContainer) return;
+      
       if (currentPartialTextElement) {
         currentPartialTextElement.innerHTML = formatTextWithMarkup(text);
       } else {
-        appendNormalText(container, text);
+        const el = document.createElement('span');
+        el.innerHTML = formatTextWithMarkup(text);
+        currentBotMessageContainer.appendChild(el);
+        currentPartialTextElement = el;
       }
+      
       scrollChatToBottomIfNeeded();
     }
 
     // -----------------------------------------------------
     // THINKING BLOCK FUNCTIONS
     // -----------------------------------------------------
-    function startThinkBlock(container) {
-      const wrap = document.createElement('div');
-      wrap.classList.add('bot-think');
-
+    function startThinkBlock(messages) {
+      const thinkContainer = document.createElement('div');
+      thinkContainer.classList.add('bot-think');
+      
       const indicator = document.createElement('div');
       indicator.classList.add('thinking-indicator');
-      indicator.textContent = 'Thinking...';
-
+      indicator.textContent = 'AI is thinking...';
+      
       const contentDiv = document.createElement('div');
       contentDiv.classList.add('think-content');
       contentDiv.style.display = 'none';
-
+      
       indicator.addEventListener('click', () => {
         if (contentDiv.style.display === 'none') {
           contentDiv.style.display = 'block';
           indicator.textContent = 'Hide thinking';
         } else {
           contentDiv.style.display = 'none';
-          indicator.textContent = 'Thinking...';
+          indicator.textContent = 'AI is thinking...';
         }
       });
-
-      wrap.appendChild(indicator);
-      wrap.appendChild(contentDiv);
-      container.appendChild(wrap);
+      
+      thinkContainer.appendChild(indicator);
+      thinkContainer.appendChild(contentDiv);
+      messages.appendChild(thinkContainer);
+      
       scrollChatToBottomIfNeeded();
-
+      
       const block = { indicator, contentDiv };
       thinkBlocks.push(block);
       currentThinkBlock = block;
+      
+      return thinkContainer;
     }
+
     function appendThinkText(text) {
       if (!currentThinkBlock) return;
-      currentThinkBlock.contentDiv.innerHTML += escapeHTML(text);
+      
+      const content = escapeHTML(text);
+      currentThinkBlock.contentDiv.innerHTML += content;
       scrollChatToBottomIfNeeded();
     }
+
     function endThinkBlock() {
       currentThinkBlock = null;
       inThinkBlock = false;
@@ -660,56 +1219,106 @@
     // -----------------------------------------------------
     // CODE BLOCK FUNCTIONS (with Prism.js)
     // -----------------------------------------------------
-    function startCodeBlock(container) {
+    function startCodeBlock(messages, declaredLang = null) {
       const codeBlockDiv = document.createElement('div');
       codeBlockDiv.classList.add('code-block');
-
+      
+      const headerDiv = document.createElement('div');
+      headerDiv.classList.add('code-header');
+      
+      const langTag = document.createElement('span');
+      langTag.classList.add('code-lang-tag');
+      langTag.textContent = declaredLang || 'plaintext';
+      
       const copyBtn = document.createElement('button');
       copyBtn.classList.add('copy-button');
-      copyBtn.textContent = 'Copy';
-
+      copyBtn.innerHTML = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
+        Copy
+      `;
+      
+      headerDiv.appendChild(langTag);
+      headerDiv.appendChild(copyBtn);
+      
       const preEl = document.createElement('pre');
       const codeEl = document.createElement('code');
+      
+      if (declaredLang) {
+        const normalizedLang = languageAliases[declaredLang.toLowerCase()] || declaredLang.toLowerCase();
+        codeEl.classList.add(`language-${normalizedLang}`);
+      }
+      
       preEl.appendChild(codeEl);
-
-      codeBlockDiv.appendChild(copyBtn);
+      codeBlockDiv.appendChild(headerDiv);
       codeBlockDiv.appendChild(preEl);
-
-      container.appendChild(codeBlockDiv);
-
+      
+      messages.appendChild(codeBlockDiv);
+      
       currentCodeBlockContainer = codeBlockDiv;
       currentCodeElement = codeEl;
       codeLines = [];
-      codeLines.lang = null; // To store detected language
-
+      codeLines.lang = declaredLang;
+      
       copyBtn.addEventListener('click', () => {
-        const text = codeEl.innerText;
+        const text = codeEl.textContent;
         navigator.clipboard.writeText(text).then(() => {
-          copyBtn.textContent = 'Copied!';
-          setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+          copyBtn.innerHTML = `
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+            Copied!
+          `;
+          setTimeout(() => {
+            copyBtn.innerHTML = `
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              Copy
+            `;
+          }, 1500);
         });
       });
+      
+      scrollChatToBottomIfNeeded();
+      return codeBlockDiv;
     }
 
     function appendCodeLine(line) {
-      // If first line might be a language name, detect it
+      // Check for language declaration at the first line
       if (codeLines.length === 0 && !codeLines.lang) {
-        const langMatch = line.match(/^([a-zA-Z]+)\s*$/);
+        const langMatch = line.match(/^([a-zA-Z0-9_+\-.]+)\s*$/);
         if (langMatch) {
-          codeLines.lang = langMatch[1].toLowerCase();
-          return; // do not add this line to the code
+          const lang = langMatch[1].toLowerCase();
+          const normalizedLang = languageAliases[lang] || lang;
+          
+          codeLines.lang = normalizedLang;
+          if (currentCodeElement && currentCodeBlockContainer) {
+            currentCodeElement.classList.add(`language-${normalizedLang}`);
+            
+            // Update language tag in header
+            const langTag = currentCodeBlockContainer.querySelector('.code-lang-tag');
+            if (langTag) {
+              langTag.textContent = normalizedLang;
+            }
+          }
+          return; // Skip this line as it's just the language declaration
         }
       }
+      
       codeLines.push(line);
       if (currentCodeElement) {
-        currentCodeElement.appendChild(document.createTextNode(line + "\n"));
+        currentCodeElement.textContent += line + '\n';
         scrollChatToBottomIfNeeded();
       }
     }
 
     function endCodeBlock() {
       if (!currentCodeElement) return;
-
+      
       // Trim leading/trailing blank lines
       while (codeLines.length && codeLines[0].trim() === '') {
         codeLines.shift();
@@ -717,6 +1326,7 @@
       while (codeLines.length && codeLines[codeLines.length - 1].trim() === '') {
         codeLines.pop();
       }
+      
       // Determine minimal indentation
       let minIndent = Infinity;
       for (const ln of codeLines) {
@@ -731,28 +1341,41 @@
         }
       }
       if (!Number.isFinite(minIndent)) { minIndent = 0; }
-
+      
       // Rebuild code with indentation removed
       const cleaned = codeLines.map(ln => ln.slice(minIndent)).join('\n');
       currentCodeElement.textContent = cleaned;
-
-      // Syntax highlighting if language detected
-      if (codeLines.lang && Prism.languages[codeLines.lang]) {
-        currentCodeElement.classList.add(`language-${codeLines.lang}`);
-        Prism.highlightElement(currentCodeElement);
+      
+      // Detect language if not already set
+      if (!codeLines.lang || codeLines.lang === 'plaintext') {
+        const detectedLang = detectLanguage(cleaned, null);
+        if (detectedLang) {
+          currentCodeElement.className = `language-${detectedLang}`;
+          
+          // Update language tag in header
+          const langTag = currentCodeBlockContainer.querySelector('.code-lang-tag');
+          if (langTag) {
+            langTag.textContent = detectedLang;
+          }
+        }
       }
-
+      
+      // Apply syntax highlighting
+      Prism.highlightElement(currentCodeElement);
+      
       inCodeBlock = false;
       currentCodeElement = null;
       codeLines = [];
       currentCodeBlockContainer = null;
       currentPartialTextElement = null;
+      
+      scrollChatToBottomIfNeeded();
     }
 
     // -----------------------------------------------------
     // PARSING STREAMED CHUNKS
     // -----------------------------------------------------
-    function parseAndAppendChunk(newText) {
+    function parseAndAppendChunk(messages, newText) {
       if (inThinkBlock) {
         const closeTag = "</think>";
         const closeIdx = newText.indexOf(closeTag);
@@ -765,7 +1388,7 @@
           endThinkBlock();
           const remainder = newText.slice(closeIdx + closeTag.length);
           if (remainder) {
-            parseAndAppendChunk(remainder);
+            parseAndAppendChunk(messages, remainder);
           }
           return;
         }
@@ -774,46 +1397,70 @@
       let textToProcess = leftoverLine + newText;
       leftoverLine = "";
       const segments = textToProcess.split('\n');
+      
       for (let i = 0; i < segments.length - 1; i++) {
-        processLine(segments[i]);
+        processLine(messages, segments[i]);
       }
+      
       leftoverLine = segments[segments.length - 1];
 
       if (!inCodeBlock && leftoverLine) {
         const trimmedLeft = leftoverLine.trim();
-        const isFence = (
-          trimmedLeft.startsWith('```') ||
-          dashedLineRegex.test(trimmedLeft) ||
-          trimmedLeft === '<think>' ||
-          trimmedLeft === '</think>'
-        );
+        
+        // Check if it's a fence start/end
+        let isFence = false;
+        for (const pattern of codeFencePatterns) {
+          if (pattern.test(trimmedLeft)) {
+            isFence = true;
+            break;
+          }
+        }
+        
+        // Check for thinking blocks
+        if (trimmedLeft === '<think>' || trimmedLeft === '</think>') {
+          isFence = true;
+        }
+        
         if (isFence) {
-          updatePartialText(currentBotMessageContainer, "");
+          updatePartialText("");
         } else {
-          updatePartialText(currentBotMessageContainer, leftoverLine);
+          updatePartialText(leftoverLine);
         }
       }
     }
 
-    function processLine(line) {
+    function processLine(messages, line) {
       const trimmed = line.trim();
-      // Code fence or dashed line
-      if (trimmed.startsWith('```') || dashedLineRegex.test(trimmed)) {
+      
+      // Check for code fence start/end
+      let isFence = false;
+      let declaredLang = null;
+      
+      for (const pattern of codeFencePatterns) {
+        const match = trimmed.match(pattern);
+        if (match) {
+          isFence = true;
+          if (match[1]) { // Captured language name
+            declaredLang = match[1];
+          }
+          break;
+        }
+      }
+      
+      if (isFence) {
         if (!inCodeBlock) {
           inCodeBlock = true;
-          startCodeBlock(currentBotMessageContainer);
+          startCodeBlock(messages, declaredLang);
         } else {
           endCodeBlock();
         }
         return;
       }
+      
       // <think> block
       if (trimmed === '<think>') {
-        if (line.replace('<think>', '').trim().length > 0) {
-          appendNormalText(currentBotMessageContainer, line.replace('<think>', ''));
-        }
         inThinkBlock = true;
-        startThinkBlock(currentBotMessageContainer);
+        startThinkBlock(messages);
         return;
       }
       if (trimmed === '</think>') {
@@ -825,13 +1472,26 @@
       if (inCodeBlock) {
         appendCodeLine(line);
       } else {
-        // Normal text
+        // Normal text - if we have meaningful content
         if (line.trim().length > 0) {
-          appendNormalText(currentBotMessageContainer, line);
+          // If we have leftover partial text, complete it first
+          if (currentPartialTextElement) {
+            currentPartialTextElement.innerHTML = formatTextWithMarkup(leftoverLine);
+            currentPartialTextElement = null;
+          }
+          
+          // Create a new message bubble if we don't have one
+          if (!currentBotMessageContainer) {
+            currentBotMessageContainer = appendTextToBotMessage(messages, line);
+          } else {
+            // We're in the middle of a message - do we need a line break?
+            const formattedLine = formatTextWithMarkup(line);
+            currentBotMessageContainer.innerHTML += '<br>' + formattedLine;
+          }
         }
       }
     }
-
+    
     // -----------------------------------------------------
     // MULTIMODAL: IMAGE PASTE & PREVIEW HANDLING
     // -----------------------------------------------------
@@ -862,7 +1522,7 @@
 
       const removeBtn = document.createElement('button');
       removeBtn.classList.add('remove-image');
-      removeBtn.textContent = 'x';
+      removeBtn.innerHTML = '×';
       removeBtn.addEventListener('click', () => {
         removeImagePreview(imageId, previewDiv);
       });
@@ -893,33 +1553,34 @@
       downloadAnchorNode.click();
       downloadAnchorNode.remove();
     }
+    
     exportChatButton.addEventListener('click', exportConversation);
 
     function updateExportButtonVisibility() {
-      exportChatButton.style.display = conversation.length > 0 ? 'inline-block' : 'none';
+      exportChatButton.style.display = conversation.length > 0 ? 'inline-flex' : 'none';
     }
-
-    // importChatButton.addEventListener('click', () => {
-    //   importFileInput.value = null;
-    //   importFileInput.click();
-    // });
 
     importFileInput.addEventListener('change', handleImportFile);
 
     function handleImportFile(event) {
       const file = event.target.files[0];
       if (!file) return;
+      
       const reader = new FileReader();
       reader.onload = function(e) {
         try {
           const importedData = JSON.parse(e.target.result);
+          
           if (activeAbortControllers.length > 0) {
             activeAbortControllers.forEach(controller => controller.abort());
             activeAbortControllers = [];
           }
+          
           if (typeof importedData !== "object" || !Array.isArray(importedData.messages)) {
             throw new Error("Imported JSON must have a 'messages' array.");
           }
+          
+          // Validate messages
           for (let i = 0; i < importedData.messages.length; i++) {
             const msg = importedData.messages[i];
             if (typeof msg !== "object" || !("role" in msg) || !("content" in msg)) {
@@ -937,11 +1598,14 @@
               }
             }
           }
+          
           if (typeof importedData.model === "string") {
             setModelIfExists(importedData.model);
           }
+          
           conversation = importedData.messages;
           renderConversationFromArray();
+          
         } catch (ex) {
           alert("Failed to import conversation: " + ex.message);
           console.error(ex);
@@ -964,9 +1628,157 @@
 
     function renderConversationFromArray() {
       chatWindow.innerHTML = '';
+      resetState();
+      
+      // Group consecutive messages by the same role
+      let currentRole = null;
+      let messageContainer = null;
+      
+      conversation.forEach(msg => {
+        if (msg.role === 'user') {
+          // Create user message
+          appendUserMessage(msg.content, msg.images);
+          currentRole = 'user';
+        } else if (msg.role === 'assistant') {
+          // Create bot message container
+          const messages = createBotMessageGroup();
+          currentRole = 'assistant';
+          
+          // Process the bot message
+          inCodeBlock = false;
+          inThinkBlock = false;
+          
+          const lines = msg.content.split('\n');
+          let currentText = '';
+          
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            const trimmed = line.trim();
+            
+            // Check for code fence
+            let isFence = false;
+            let declaredLang = null;
+            
+            for (const pattern of codeFencePatterns) {
+              const match = trimmed.match(pattern);
+              if (match) {
+                isFence = true;
+                if (match[1]) { // Captured language name
+                  declaredLang = match[1];
+                }
+                break;
+              }
+            }
+            
+            // Handle think blocks
+            if (trimmed === '<think>') {
+              // If we have accumulated text, output it first
+              if (currentText) {
+                appendTextToBotMessage(messages, currentText);
+                currentText = '';
+              }
+              
+              // Start think block
+              inThinkBlock = true;
+              const thinkBlock = startThinkBlock(messages);
+              
+              // Collect thinking content until </think>
+              let thinkContent = '';
+              i++;
+              while (i < lines.length && lines[i].trim() !== '</think>') {
+                thinkContent += lines[i] + '\n';
+                i++;
+              }
+              
+              // Add to think block
+              thinkBlock.querySelector('.think-content').textContent = thinkContent;
+              continue;
+            }
+            
+            // Handle code blocks
+            if (isFence) {
+              // If we have accumulated text, output it first
+              if (currentText) {
+                appendTextToBotMessage(messages, currentText);
+                currentText = '';
+              }
+              
+              if (!inCodeBlock) {
+                // Start a code block
+                inCodeBlock = true;
+                const codeBlock = startCodeBlock(messages, declaredLang);
+                
+                // Collect code until closing fence
+                let codeContent = '';
+                i++;
+                let foundClosingFence = false;
+                
+                while (i < lines.length) {
+                  const codeLine = lines[i];
+                  let isClosingFence = false;
+                  
+                  // Check if this line is a closing fence
+                  for (const pattern of codeFencePatterns) {
+                    if (pattern.test(codeLine.trim())) {
+                      isClosingFence = true;
+                      break;
+                    }
+                  }
+                  
+                  if (isClosingFence) {
+                    foundClosingFence = true;
+                    break;
+                  }
+                  
+                  codeContent += codeLine + '\n';
+                  i++;
+                }
+                
+                // Add the code and apply highlighting
+                const codeEl = codeBlock.querySelector('code');
+                codeEl.textContent = codeContent;
+                
+                // Detect language if not specified
+                if (!declaredLang) {
+                  const detectedLang = detectLanguage(codeContent);
+                  if (detectedLang) {
+                    codeEl.className = `language-${detectedLang}`;
+                    const langTag = codeBlock.querySelector('.code-lang-tag');
+                    if (langTag) {
+                      langTag.textContent = detectedLang;
+                    }
+                  }
+                }
+                
+                // Apply syntax highlighting
+                Prism.highlightElement(codeEl);
+                
+                // Reset state
+                inCodeBlock = false;
+              }
+            } else {
+              // Regular text line
+              currentText += line + '\n';
+            }
+          }
+          
+          // Output any remaining text
+          if (currentText) {
+            appendTextToBotMessage(messages, currentText);
+          }
+        }
+      });
+      
+      scrollChatToBottom();
+      updateExportButtonVisibility();
+      currentModel = modelSelect.value;
+    }
+
+    function resetState() {
       leftoverLine = "";
       inCodeBlock = false;
       codeLines = [];
+      currentBotMessageGroup = null;
       currentBotMessageContainer = null;
       currentPartialTextElement = null;
       inThinkBlock = false;
@@ -974,42 +1786,11 @@
       userInput.value = '';
       pastedImages = [];
       imagePreviewContainer.innerHTML = '';
-
-      conversation.forEach(msg => {
-        if (msg.role === 'user') {
-          const userBubble = appendMessage('user', msg.content);
-          if (msg.images && Array.isArray(msg.images)) {
-            const imagesDiv = document.createElement('div');
-            imagesDiv.classList.add('user-images');
-            msg.images.forEach(base64Data => {
-              const imgEl = document.createElement('img');
-              imgEl.src = base64Data;
-              imagesDiv.appendChild(imgEl);
-            });
-            userBubble.appendChild(imagesDiv);
-          }
-        } else if (msg.role === 'assistant') {
-          currentBotMessageContainer = createBotMessageContainer();
-          leftoverLine = "";
-          inCodeBlock = false;
-          inThinkBlock = false;
-          currentThinkBlock = null;
-
-          parseAndAppendChunk(msg.content + "\n");
-          if (leftoverLine) {
-            processLine(leftoverLine);
-            leftoverLine = "";
-          }
-        }
-      });
-
-      scrollChatToBottom();
-      updateExportButtonVisibility();
-      currentModel = modelSelect.value;
+      userInput.style.height = 'auto';
     }
 
     // -----------------------------------------------------
-    // SEND MESSAGE & STREAM RESPONSE (with auth token)
+    // SEND MESSAGE & STREAM RESPONSE
     // -----------------------------------------------------
     async function sendMessage() {
       // Abort any active streams
@@ -1017,43 +1798,40 @@
         activeAbortControllers.forEach(controller => controller.abort());
         activeAbortControllers = [];
         sendButton.textContent = 'Send';
-        sendButton.style.backgroundColor = '#238636';
+        sendButton.style.backgroundColor = 'var(--accent-primary)';
       }
 
       const message = userInput.value.trim();
       if (!message && pastedImages.length === 0) return;
 
       // User bubble
-      const userBubble = appendMessage('user', message);
+      appendUserMessage(message, pastedImages.map(img => img.data));
+      
+      // Add message to conversation array
       let userMessageObj = { role: 'user', content: message };
-
       if (pastedImages.length > 0) {
-        const imagesDiv = document.createElement('div');
-        imagesDiv.classList.add('user-images');
-        pastedImages.forEach(img => {
-          const imgEl = document.createElement('img');
-          imgEl.src = img.data;
-          imagesDiv.appendChild(imgEl);
-        });
-        userBubble.appendChild(imagesDiv);
         userMessageObj.images = pastedImages.map(img => img.data);
       }
       conversation.push(userMessageObj);
       updateExportButtonVisibility();
+      
+      // Get selected model
       currentModel = modelSelect.value;
 
+      // Prepare images for API
       const imageDataArray = pastedImages.map(img => img.data);
+      
+      // Reset input and images
       userInput.value = '';
+      userInput.style.height = 'auto';
       pastedImages = [];
       imagePreviewContainer.innerHTML = '';
 
-      // Bot container
-      currentBotMessageContainer = createBotMessageContainer();
-      leftoverLine = "";
-      inCodeBlock = false;
-      codeLines = [];
-      inThinkBlock = false;
-      currentThinkBlock = null;
+      // Create bot message group for response
+      const messages = createBotMessageGroup();
+      
+      // Reset state for new bot message
+      resetState();
       scrollChatToBottom();
 
       const controller = new AbortController();
@@ -1061,7 +1839,7 @@
       currentRequestController = controller;
 
       sendButton.textContent = 'Stop';
-      sendButton.style.backgroundColor = 'red';
+      sendButton.style.backgroundColor = 'var(--accent-danger)';
 
       const token = localStorage.getItem('token');
       const headers = { 'Content-Type': 'application/json' };
@@ -1093,14 +1871,19 @@
           } catch (jsonError) {
             // Fallback to generic error
           }
-          const errorBubble = appendMessage('bot', errorMessage);
-          errorBubble.style.backgroundColor = 'red';
+          
+          const errorMsg = document.createElement('div');
+          errorMsg.classList.add('chat-message', 'bot');
+          errorMsg.style.backgroundColor = 'var(--accent-danger)';
+          errorMsg.textContent = errorMessage;
+          messages.appendChild(errorMsg);
           return;
         }
 
         if (!response.body) {
           throw new Error('No readable stream in response.');
         }
+        
         scrollChatToBottom();
 
         const reader = response.body.getReader();
@@ -1110,9 +1893,11 @@
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+          
           const chunk = decoder.decode(value);
           botMessageFull += chunk;
-          parseAndAppendChunk(chunk);
+          parseAndAppendChunk(messages, chunk);
+          
           // yield control briefly
           await new Promise(r => setTimeout(r, 0));
         }
@@ -1122,9 +1907,10 @@
             currentPartialTextElement.parentNode.removeChild(currentPartialTextElement);
             currentPartialTextElement = null;
           }
-          processLine(leftoverLine);
+          processLine(messages, leftoverLine);
           leftoverLine = "";
         }
+        
         // Store final bot text in conversation
         conversation.push({ role: 'assistant', content: botMessageFull });
         updateExportButtonVisibility();
@@ -1141,18 +1927,24 @@
           // Generation canceled
         } else {
           console.error('Error streaming:', err);
-          appendMessage('bot', 'Error: ' + err.message);
+          
+          const errorMsg = document.createElement('div');
+          errorMsg.classList.add('chat-message', 'bot');
+          errorMsg.style.backgroundColor = 'var(--accent-danger)';
+          errorMsg.textContent = 'Error: ' + err.message;
+          messages.appendChild(errorMsg);
         }
       } finally {
         activeAbortControllers = activeAbortControllers.filter(c => c !== controller);
         if (currentRequestController === controller) {
           sendButton.textContent = 'Send';
-          sendButton.style.backgroundColor = '#238636';
+          sendButton.style.backgroundColor = 'var(--accent-primary)';
         }
       }
     }
 
     sendButton.addEventListener('click', sendMessage);
+    
     userInput.addEventListener('keydown', e => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -1164,16 +1956,7 @@
     newChatButton.addEventListener('click', () => {
       conversation = [];
       chatWindow.innerHTML = '';
-      leftoverLine = "";
-      inCodeBlock = false;
-      codeLines = [];
-      currentBotMessageContainer = null;
-      currentPartialTextElement = null;
-      inThinkBlock = false;
-      currentThinkBlock = null;
-      userInput.value = '';
-      pastedImages = [];
-      imagePreviewContainer.innerHTML = '';
+      resetState();
       currentConversationId = null; // Reset ID
 
       updateExportButtonVisibility();
@@ -1184,21 +1967,27 @@
     // AUTHENTICATION FUNCTIONS & LOGIC
     // -----------------------------------------------------
     function showModal(modalId) {
-      document.getElementById(modalId).style.display = 'block';
+      document.getElementById(modalId).classList.add('active');
     }
+    
     function closeModal(modalId) {
-      document.getElementById(modalId).style.display = 'none';
+      document.getElementById(modalId).classList.remove('active');
     }
+    
     function updateAuthButtons() {
       const authButtons = document.getElementById('auth-buttons');
       const token = localStorage.getItem('token');
+      
       if (token) {
         try {
           const payload = JSON.parse(atob(token.split('.')[1]));
           const username = payload.username;
+          
           authButtons.innerHTML = `
-            <span>Welcome back, ${username}</span>
-            <button onclick="logout()">Sign Out</button>
+            <div class="user-info">
+              <span>${username}</span>
+              <button class="button-secondary" onclick="logout()">Sign Out</button>
+            </div>
           `;
         } catch (e) {
           localStorage.removeItem('token');
@@ -1206,8 +1995,8 @@
         }
       } else {
         authButtons.innerHTML = `
-          <button onclick="showModal('signup-modal')">Sign Up</button>
-          <button onclick="showModal('login-modal')">Sign In</button>
+          <button class="button-secondary" onclick="showModal('signup-modal')">Sign Up</button>
+          <button class="button-primary" onclick="showModal('login-modal')">Sign In</button>
         `;
       }
     }
@@ -1216,18 +2005,22 @@
       e.preventDefault();
       const username = document.getElementById('signup-username').value;
       const password = document.getElementById('signup-password').value;
+      
       try {
         const response = await fetch('/signup', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username, password }),
         });
+        
         if (!response.ok) {
           const errorData = await response.json();
           throw new Error(errorData.detail || 'Signup failed');
         }
+        
         alert('Signup successful! Please sign in.');
         closeModal('signup-modal');
+        showModal('login-modal');
       } catch (error) {
         alert(error.message);
       }
@@ -1237,16 +2030,19 @@
       e.preventDefault();
       const username = document.getElementById('login-username').value;
       const password = document.getElementById('login-password').value;
+      
       try {
         const response = await fetch('/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username, password }),
         });
+        
         if (!response.ok) {
           const errorData = await response.json();
           throw new Error(errorData.detail || 'Login failed');
         }
+        
         const data = await response.json();
         localStorage.setItem('token', data.token);
         updateAuthButtons();
@@ -1257,7 +2053,7 @@
       }
     });
 
-    // Updated logout: clear token AND reset local conversation state
+    // Logout function
     function logout() {
       localStorage.removeItem('token');
       updateAuthButtons();
@@ -1267,28 +2063,21 @@
       // Reset current conversation state in the frontend
       conversation = [];
       chatWindow.innerHTML = '';
-      leftoverLine = "";
-      inCodeBlock = false;
-      codeLines = [];
-      currentBotMessageContainer = null;
-      currentPartialTextElement = null;
-      inThinkBlock = false;
-      currentThinkBlock = null;
-      userInput.value = '';
-      pastedImages = [];
-      imagePreviewContainer.innerHTML = '';
+      resetState();
       currentConversationId = null;
     }
+
+    // Make logout function global for onclick handlers
+    window.logout = logout;
+    window.showModal = showModal;
+    window.closeModal = closeModal;
 
     // -----------------------------------------------------
     // SIDEBAR: TOGGLE & FETCHING CONVERSATIONS
     // -----------------------------------------------------
     toggleSidebarButton.addEventListener('click', () => {
-      if (sidebar.classList.contains('open')) {
-        sidebar.classList.remove('open');
-      } else {
-        sidebar.classList.add('open');
-      }
+      sidebar.classList.toggle('open');
+      document.body.classList.toggle('sidebar-collapsed');
     });
 
     async function fetchConversations() {
@@ -1298,22 +2087,35 @@
         document.getElementById('conversation-list').innerHTML = '';
         return;
       }
+      
       document.getElementById('not-signed-in-message').style.display = 'none';
+      
       try {
         const response = await fetch('/conversations', {
           headers: { 'Authorization': `Bearer ${token}` },
         });
+        
         if (!response.ok) {
           throw new Error('Failed to fetch conversations');
         }
+        
         const data = await response.json();
         const conversationList = document.getElementById('conversation-list');
         conversationList.innerHTML = '';
+        
+        if (data.conversations.length === 0) {
+          const emptyState = document.createElement('div');
+          emptyState.classList.add('empty-state');
+          emptyState.textContent = 'No saved conversations yet.';
+          conversationList.appendChild(emptyState);
+          return;
+        }
+        
         data.conversations.forEach(conv => {
           const div = document.createElement('div');
           div.classList.add('conversation-preview');
           div.innerHTML = `
-            <p>${conv.preview}</p>
+            <p>${conv.preview || 'Untitled conversation'}</p>
             <small>${new Date(conv.updated_at).toLocaleString()}</small>
           `;
           div.addEventListener('click', () => loadConversation(conv.conversation_id));
@@ -1324,29 +2126,46 @@
       }
     }
 
-    // --- FIXED: Immediately update currentConversationId when loading a conversation ---
     async function loadConversation(conversationId) {
       const token = localStorage.getItem('token');
       if (!token) return;
+      
       try {
         const response = await fetch(`/conversations/${conversationId}`, {
           headers: { 'Authorization': `Bearer ${token}` },
         });
+        
         if (!response.ok) {
           throw new Error('Failed to load conversation');
         }
+        
         const data = await response.json();
-        // Update currentConversationId immediately so subsequent messages use the correct conversation
+        
+        // Update currentConversationId immediately
         currentConversationId = conversationId;
+        
         // If the server returns data.model, update the model dropdown
         if (typeof data.model === "string") {
           setModelIfExists(data.model);
         }
+        
         conversation = data.messages;
         renderConversationFromArray();
+        
+        // Close the sidebar on mobile after selection
+        if (window.innerWidth <= 768) {
+          sidebar.classList.remove('open');
+        }
       } catch (error) {
         console.error('Error loading conversation:', error);
       }
+    }
+
+    // Initial setup
+    if (window.innerWidth <= 768) {
+      document.body.classList.add('sidebar-collapsed');
+    } else {
+      sidebar.classList.add('open');
     }
   </script>
 </body>
