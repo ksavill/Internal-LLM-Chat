@@ -431,6 +431,17 @@
       cursor: pointer;
     }
 
+    #backup-model-select {
+      background-color: var(--bg-tertiary);
+      color: var(--text-primary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--border-radius);
+      padding: 8px 12px;
+      font-size: 0.9rem;
+      appearance: none;
+      cursor: pointer;
+    }
+
     /* Image preview */
     #image-preview-container {
       display: flex;
@@ -741,9 +752,15 @@
     <!-- Input Container -->
     <div class="input-container">
       <div class="input-options">
-        <div class="model-select-container">
-          <label for="model-select">Model:</label>
-          <select id="model-select"></select>
+        <div class="model-select-container" style="display: flex; gap: 20px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <label for="model-select">Model:</label>
+            <select id="model-select"></select>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <label for="backup-model-select">Backup Model:</label>
+            <select id="backup-model-select"></select>
+          </div>
         </div>
       </div>
       
@@ -815,6 +832,7 @@
     const userInput = document.getElementById('user-input');
     const sendButton = document.getElementById('send-button');
     const modelSelect = document.getElementById('model-select');
+    const backupModelSelect = document.getElementById('backup-model-select');
     const newChatButton = document.getElementById('new-chat-button');
     const exportChatButton = document.getElementById('export-chat-button');
     const importFileInput = document.getElementById('import-file-input');
@@ -824,6 +842,7 @@
 
     let conversation = [];
     let currentModel = null;
+    let currentBackupModel = null;
     let currentConversationId = null;
     let leftoverLine = "";
     let currentBotMessageGroup = null;
@@ -913,11 +932,19 @@
         const data = await response.json();
         if (data.models && Array.isArray(data.models)) {
           data.models.forEach(model => {
+            // Primary model dropdown
             const option = document.createElement('option');
             option.value = model.NAME;
             option.textContent = model.NAME;
             option.setAttribute('data-source', 'ollama');
             modelSelect.appendChild(option);
+            
+            // Backup model dropdown
+            const backupOption = document.createElement('option');
+            backupOption.value = model.NAME;
+            backupOption.textContent = model.NAME;
+            backupOption.setAttribute('data-source', 'ollama');
+            backupModelSelect.appendChild(backupOption);
           });
         } else {
           console.error('Invalid Ollama models data:', data);
@@ -937,11 +964,19 @@
         const data = await response.json();
         if (data.models && Array.isArray(data.models)) {
           data.models.forEach(model => {
+            // Primary model dropdown
             const option = document.createElement('option');
             option.value = model.NAME;
             option.textContent = model.NAME;
             option.setAttribute('data-source', 'openai');
             modelSelect.appendChild(option);
+            
+            // Backup model dropdown
+            const backupOption = document.createElement('option');
+            backupOption.value = model.NAME;
+            backupOption.textContent = model.NAME;
+            backupOption.setAttribute('data-source', 'openai');
+            backupModelSelect.appendChild(backupOption);
           });
         } else {
           console.error('Invalid OpenAI models data:', data);
@@ -960,17 +995,40 @@
         "qwen2.5-coder:32b",
         "qwen2.5-coder:14b",
         "qwen2.5-coder:7b",
-        "qwen2.5-coder:1.5b"
+        "qwen2.5-coder:1.5b",
+        "llama3.2:latest"
       ];
+      
       const options = modelSelect.options;
+      let primaryModelIndex = -1;
+      
+      // Set primary model
       for (const modelName of preferredModels) {
         for (let i = 0; i < options.length; i++) {
           if (options[i].value === modelName) {
             modelSelect.selectedIndex = i;
             currentModel = modelName;
-            return;
+            primaryModelIndex = preferredModels.indexOf(modelName);
+            break;
           }
         }
+        if (primaryModelIndex !== -1) break;
+      }
+      
+      // Always set backup model to the last model in the preferredModels list
+      const backupModelName = preferredModels[preferredModels.length - 1];
+      for (let i = 0; i < backupModelSelect.options.length; i++) {
+        if (backupModelSelect.options[i].value === backupModelName) {
+          backupModelSelect.selectedIndex = i;
+          currentBackupModel = backupModelName;
+          break;
+        }
+      }
+      
+      // If the last model in preferredModels isn't available, use the first available model
+      if (!currentBackupModel && backupModelSelect.options.length > 0) {
+        backupModelSelect.selectedIndex = 0;
+        currentBackupModel = backupModelSelect.options[0].value;
       }
     }
 
@@ -1543,6 +1601,7 @@
     function exportConversation() {
       const exportObj = {
         model: currentModel || "",
+        backup_model: currentBackupModel || "",
         messages: conversation
       };
       const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportObj, null, 2));
@@ -1817,6 +1876,7 @@
       
       // Get selected model
       currentModel = modelSelect.value;
+      currentBackupModel = backupModelSelect.value;
 
       // Prepare images for API
       const imageDataArray = pastedImages.map(img => img.data);
@@ -1853,6 +1913,7 @@
           headers: headers,
           body: JSON.stringify({ 
             model: currentModel, 
+            backup_model: currentBackupModel,
             messages: conversation, 
             stream: true,
             image_b64: imageDataArray,
@@ -1889,17 +1950,57 @@
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let botMessageFull = "";
+        let buffer = "";
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
           
           const chunk = decoder.decode(value);
-          botMessageFull += chunk;
-          parseAndAppendChunk(messages, chunk);
+          buffer += chunk;
+          
+          // Process complete JSON objects that end with newline
+          let newlineIndex;
+          while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+            const line = buffer.substring(0, newlineIndex).trim();
+            buffer = buffer.substring(newlineIndex + 1);
+            
+            if (line) {
+              try {
+                const jsonObj = JSON.parse(line);
+                if (jsonObj && jsonObj.message !== undefined) {
+                  const messageContent = jsonObj.message;
+                  botMessageFull += messageContent;
+                  parseAndAppendChunk(messages, messageContent);
+                }
+              } catch (e) {
+                console.error('Error parsing JSON from stream:', e, 'Line:', line);
+                // If JSON parsing fails, treat the line as raw text
+                botMessageFull += line;
+                parseAndAppendChunk(messages, line);
+              }
+            }
+          }
           
           // yield control briefly
           await new Promise(r => setTimeout(r, 0));
+        }
+
+        // Process any remaining text in the buffer
+        if (buffer.trim()) {
+          try {
+            const jsonObj = JSON.parse(buffer.trim());
+            if (jsonObj && jsonObj.message !== undefined) {
+              const messageContent = jsonObj.message;
+              botMessageFull += messageContent;
+              parseAndAppendChunk(messages, messageContent);
+            }
+          } catch (e) {
+            console.error('Error parsing final JSON from stream:', e);
+            // If JSON parsing fails, treat the buffer as raw text
+            botMessageFull += buffer;
+            parseAndAppendChunk(messages, buffer);
+          }
         }
 
         if (leftoverLine) {

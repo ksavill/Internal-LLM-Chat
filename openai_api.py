@@ -1,7 +1,9 @@
 import os
 import json
-import requests
 import asyncio
+import aiohttp
+from typing import Dict, List, Any, AsyncGenerator
+
 
 class OpenAIInterface:
     def __init__(self, model: str, api_key: str = None):
@@ -20,14 +22,30 @@ class OpenAIInterface:
             else:
                 self.api_key = os.environ.get('OPENAI_API_KEY')
 
+        # Session will be created on first use (lazy initialization)
+        self._session = None
+
+        # Models capabilities
         self.capabilities = {
             "chat": True,
             "generate": True,
             "tool": True,
             "image": True,
         }
-    
-    def _prepare_payload(self, base_payload: dict) -> dict:
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create an aiohttp session with no built-in timeouts."""
+        if self._session is None or self._session.closed:
+            # We rely on manual chunk reading timeouts below
+            self._session = aiohttp.ClientSession(
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json"
+                }
+            )
+        return self._session
+
+    def _prepare_payload(self, base_payload: Dict[str, Any]) -> Dict[str, Any]:
         """
         If the model is one of: o3-mini-low, o3-mini-medium, o3-mini-high,
         change model to "o3-mini" and add 'reasoning_effort' with suffix value.
@@ -45,16 +63,40 @@ class OpenAIInterface:
         return bool(self.api_key)
 
     def _supports(self, feature: str) -> bool:
+        """Check if model supports a specific feature."""
         return self.capabilities.get(feature, False)
 
-    async def send_chat_streaming(self, messages: list, **kwargs):
+    def extract_content_from_response(self, response: Dict[str, Any], is_chat: bool = True) -> str:
         """
-        Asynchronous streaming chat request. Returns an async generator
-        that yields chunks (dicts) from OpenAI. Uses 'requests' in a worker thread.
+        Extract content from a chat response.
+        - Format: response["choices"][0]["message"]["content"]
+        """
+        return response.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+    def extract_content_from_chunk(self, chunk: Dict[str, Any]) -> str:
+        """
+        Extract content from a streaming chunk.
+        - Format: chunk["choices"][0]["delta"]["content"]
+        """
+        return chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+
+    async def send_chat_streaming(
+        self,
+        messages: List[Dict[str, Any]],
+        **kwargs
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Fully asynchronous streaming chat request with a *manual read* timeout.
+        
+        We do two things here:
+        1. POST the request (no built-in connect/read timeouts).
+        2. Read each chunk with `asyncio.wait_for` so that if no chunk arrives
+           for 5s, we raise an exception (e.g. user disconnected mid-stream).
         """
         if not self._supports("chat"):
             raise ValueError(f"Model '{self.model}' does not support chat requests.")
 
+        # Process optional image parameters
         images = kwargs.pop("images", None)
         conversation_history = list(messages)
         if images:
@@ -66,74 +108,52 @@ class OpenAIInterface:
                     "content": [{"type": "image_url", "image_url": {"url": image}}]
                 })
 
-        payload = {
-            "messages": conversation_history,
-            "stream": True,
-            **kwargs
-        }
+        # Prepare the request payload
+        payload = {"messages": conversation_history, "stream": True, **kwargs}
         payload = self._prepare_payload(payload)
 
+        session = await self._get_session()
         url = "https://api.openai.com/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
 
-        # Synchronous generator that reads streaming lines from OpenAI.
-        def sync_generator():
-            resp = requests.post(url, headers=headers, json=payload, stream=True)
-            resp.raise_for_status()
-            for line in resp.iter_lines(decode_unicode=True):
-                if not line:
-                    continue
-                # OpenAI streams lines like: data: {...}
-                if line.strip() == "data: [DONE]":
+        response = await session.post(url, json=payload)
+        response.raise_for_status()
+
+        # Manually read lines from the response stream
+        while True:
+            # If we don't receive any data within 5 seconds, raise an exception
+            try:
+                line = await asyncio.wait_for(response.content.readline(), timeout=5.0)
+            except asyncio.TimeoutError:
+                raise ConnectionError("No data from OpenAI in 5 seconds (mid-stream).")
+
+            if not line:
+                # Stream ended
+                break
+
+            line = line.decode('utf-8').strip()
+            if not line:
+                continue
+
+            if line.startswith("data: "):
+                data = line[len("data: "):]
+                if data == "[DONE]":
                     break
-                if line.startswith("data: "):
-                    json_str = line[len("data: "):].strip()
-                    if json_str:
-                        try:
-                            yield json.loads(json_str)
-                        except json.JSONDecodeError:
-                            pass
-
-        # Convert synchronous generator -> async generator
-        async def async_generator():
-            loop = asyncio.get_event_loop()
-            queue = asyncio.Queue()
-
-            def run_in_thread():
                 try:
-                    for item in sync_generator():
-                        queue.put_nowait(item)
-                except Exception as e:
-                    queue.put_nowait(e)
-                finally:
-                    queue.put_nowait(None)  # Sentinel
+                    yield json.loads(data)
+                except json.JSONDecodeError:
+                    pass
 
-            fut = loop.run_in_executor(None, run_in_thread)
-
-            while True:
-                chunk = await queue.get()
-                if chunk is None:
-                    break
-                if isinstance(chunk, Exception):
-                    raise chunk
-                yield chunk
-
-            await fut  # ensure thread completed
-
-        return async_generator()
-
-    async def send_chat_nonstreaming(self, messages: list, **kwargs):
+    async def send_chat_nonstreaming(self, messages: List[Dict[str, Any]], **kwargs) -> Dict[str, Any]:
         """
-        Asynchronous method to get full chat completion at once using requests.
-        Runs in a background thread to avoid blocking the event loop.
-        Returns the JSON response from OpenAI.
+        Non-streaming chat request with a *manual read* approach.
+        
+        We do a POST to get the response object, then read it in one go with
+        `asyncio.wait_for` so that if no data arrives for 5s, we raise.
         """
         if not self._supports("chat"):
             raise ValueError(f"Model '{self.model}' does not support chat requests.")
 
+        # Process optional image parameters
         images = kwargs.pop("images", None)
         conversation_history = list(messages)
         if images:
@@ -145,23 +165,27 @@ class OpenAIInterface:
                     "content": [{"type": "image_url", "image_url": {"url": image}}]
                 })
 
-        payload = {
-            "messages": conversation_history,
-            "stream": False,
-            **kwargs
-        }
+        # Prepare the request payload
+        payload = {"messages": conversation_history, "stream": False, **kwargs}
         payload = self._prepare_payload(payload)
 
+        session = await self._get_session()
         url = "https://api.openai.com/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
 
-        def sync_call():
-            resp = requests.post(url, headers=headers, json=payload)
-            resp.raise_for_status()
-            return resp.json()
+        response = await session.post(url, json=payload)
+        response.raise_for_status()
 
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, sync_call)
+        try:
+            text_body = await asyncio.wait_for(response.text(), timeout=5.0)
+        except asyncio.TimeoutError:
+            raise ConnectionError("No data from OpenAI in 5 seconds (non-streaming).")
+
+        try:
+            return json.loads(text_body)
+        except json.JSONDecodeError:
+            return {"error": "Malformed JSON from OpenAI.", "raw": text_body}
+
+    async def close(self):
+        """Close the aiohttp session when done."""
+        if self._session and not self._session.closed:
+            await self._session.close()
