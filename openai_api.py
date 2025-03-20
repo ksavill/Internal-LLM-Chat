@@ -189,3 +189,35 @@ class OpenAIInterface:
         """Close the aiohttp session when done."""
         if self._session and not self._session.closed:
             await self._session.close()
+
+    async def list_fine_tuning_jobs(self) -> Dict[str, Any]:
+        """
+        Retrieve a list of fine-tuning jobs from the OpenAI API.
+        
+        Returns:
+            A dictionary containing the list of fine-tuning jobs as returned by the API.
+        """
+        session = await self._get_session()
+        url = "https://api.openai.com/v1/fine_tuning/jobs"
+        try:
+            async with session.get(url) as response:
+                response.raise_for_status()
+                return await response.json()
+        except aiohttp.ClientError as e:
+            raise
+
+    def get_successful_fine_tuned_models(self, jobs: Dict[str, Any]) -> List[str]:
+        """
+        Extract IDs of successfully fine-tuned models from the jobs list.
+        
+        Args:
+            jobs: The JSON response from list_fine_tuning_jobs.
+        
+        Returns:
+            A list of fine-tuned model IDs (e.g., "ft:gpt-3.5-turbo:org:abc123").
+        """
+        return [
+            job["fine_tuned_model"]
+            for job in jobs.get("data", [])
+            if job.get("status") == "succeeded" and job.get("fine_tuned_model") is not None
+        ]

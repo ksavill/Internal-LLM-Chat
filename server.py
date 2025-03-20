@@ -3,9 +3,8 @@ import json
 import logging
 import asyncio
 import signal
-import sys
 from datetime import datetime, timedelta
-from typing import List, Optional, Union, Dict, Any, AsyncGenerator
+from typing import List, Optional, Union, AsyncGenerator, Any
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 
@@ -15,6 +14,18 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
+from uvicorn import Config, Server
+
+# Local imports
+from async_ollama_interface import AsyncOllamaInterface
+from openai_api import OpenAIInterface
+from config import load_config, get_value, set_value
+from database import (
+    create_conversation, create_user, get_conversation,
+    get_db_connection, get_user_conversations,
+    update_conversation, verify_user
+)
+from ollama_list_models import list_models
 
 # Configure logging
 logging.basicConfig(
@@ -65,6 +76,11 @@ async def lifespan(app):
     Manages application lifecycle - startup and shutdown events.
     Used to initialize and cleanup shared resources.
     """
+
+    # Initialize config and lock
+    app.state.config_lock = asyncio.Lock()
+    await load_config(app)
+
     # Create a semaphore to limit concurrent model requests
     app.state.model_semaphore = asyncio.Semaphore(10)  # Adjust based on your server capacity
     
@@ -111,27 +127,24 @@ async def lifespan(app):
 # -----------------------
 # Application Setup
 # -----------------------
-app = FastAPI(
-    title="LLM API Server",
-    description="A FastAPI server for handling LLM requests with Ollama and OpenAI",
+# Customer-facing app (port 23323)
+customer_app = FastAPI(
+    title="Customer Chat API",
+    description="Customer-facing chat completion endpoint",
     lifespan=lifespan,
-    openapi_url="/api/openapi.json",
-    docs_url="/api/docs",
-    redoc_url="/api/redoc",
-    max_request_body_size=20 * 1024 * 1024,  # 20MB for image uploads
+    docs_url=None,  # No docs for customer app
+    redoc_url=None,
 )
 
-# -----------------------
-# Import Local Applications
-# -----------------------
-from async_ollama_interface import AsyncOllamaInterface
-from openai_api import OpenAIInterface
-from database import (
-    create_conversation, create_user, get_conversation,
-    get_db_connection, get_user_conversations,
-    update_conversation, verify_user
+# Full-access app (port 8000)
+app = FastAPI(
+    title="LLM API Server",
+    description="Full-access FastAPI server for LLM requests",
+    lifespan=lifespan,
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    max_request_body_size=20 * 1024 * 1024,
 )
-from ollama_list_models import list_models
 
 # -----------------------
 # Configuration
@@ -191,7 +204,7 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     model: Optional[str] = "qwen2.5-coder:7b"
-    backup_model: Optional[str] = "llama3.2"
+    backup_models: Optional[Union[str, List[str]]] = None
     messages: List[ChatMessage]
     stream: Optional[bool] = False
     image_b64: Optional[Union[str, List[str]]] = None
@@ -205,83 +218,109 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
+class ConfigUpdate(BaseModel):
+    value: Any
+
 # -----------------------
 # Helper: Improved interface management
 # -----------------------
-async def get_interface(app, model_name: str):
+async def get_interface(app: FastAPI, model_name: str):
     """
     Get an appropriate interface for the specified model with efficient connection pooling.
     Caches OpenAI interfaces to reuse sessions and reduce connection overhead.
-    """
-    openai_like = [
-        "gpt-4", "gpt-4o", "gpt-3.5",
-        "gpt-4o-mini", "o1", "o1-mini",
-        "o3", "o3-mini"
-    ]
-    
-    # Determine if we should use OpenAI interface
-    is_openai = any(model_name.startswith(m) for m in openai_like)
-    
-    if is_openai:
-        # Try to get a cached interface for this model
-        if model_name in app.state.openai_interfaces:
-            return app.state.openai_interfaces[model_name]
-        
-        # Create a new interface and cache it
-        interface = OpenAIInterface(model=model_name)
-        app.state.openai_interfaces[model_name] = interface
-        return interface
-    else:
-        # For Ollama, create a new instance each time
-        # because AsyncClient manages its own session
-        return AsyncOllamaInterface(model=model_name)
 
+    Args:
+        app (FastAPI): The FastAPI application instance.
+        model_name (str): The name of the model to get an interface for.
+
+    Returns:
+        An instance of OpenAIInterface or AsyncOllamaInterface.
+
+    Raises:
+        ValueError: If model_name is invalid.
+        HTTPException: If a pro model is requested but not allowed.
+    """
+    # Validate input
+    if not model_name or not isinstance(model_name, str):
+        raise ValueError("model_name must be a non-empty string")
+
+    # Comprehensive list of OpenAI model prefixes
+    openai_prefixes = [
+        "gpt-4",          # Covers gpt-4, gpt-4-turbo, etc.
+        "gpt-4o",         # Covers gpt-4o, gpt-4o-mini
+        "gpt-3.5",        # Covers gpt-3.5-turbo, etc.
+        "o1",             # Future-proofing for o1 series
+        "o3",             # Hypothetical future models
+        "o1-pro",         # Pro model
+        "gpt-4.5-preview" # Pro model
+    ]
+
+    # List of pro model prefixes requiring special permission
+    pro_model_prefixes = [
+        "o1-pro",
+        "gpt-4.5-preview"
+    ]
+
+    # Determine if the model is an OpenAI model
+    is_openai = any(model_name.startswith(prefix) for prefix in openai_prefixes)
+
+    if is_openai:
+        # Check if it's a pro model and if pro models are allowed
+        is_pro_model = any(model_name.startswith(prefix) for prefix in pro_model_prefixes)
+        if is_pro_model and not get_value(app, "openai.pro_models_allowed"):
+            raise HTTPException(status_code=403, detail="Pro models are not allowed")
+
+        # Safely create or retrieve cached OpenAI interface
+        async with app.state.openai_interface_lock:
+            if model_name in app.state.openai_interfaces:
+                logger.debug(f"Using cached OpenAI interface for model: {model_name}")
+                return app.state.openai_interfaces[model_name]
+            logger.info(f"Creating new OpenAI interface for model: {model_name}")
+            interface = OpenAIInterface(model=model_name)
+            app.state.openai_interfaces[model_name] = interface
+            return interface
+    else:
+        # Handle non-OpenAI models with Ollama
+        logger.debug(f"Creating new Ollama interface for model: {model_name}")
+        return AsyncOllamaInterface(model=model_name)
+    
 # -----------------------
 # Authentication Endpoints
 # -----------------------
-@app.post("/signup")
-async def signup(signup_req: SignupRequest):
+async def shared_signup(signup_req: SignupRequest):
     try:
         create_user(signup_req.username, signup_req.password)
         return {"message": "User created successfully"}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.post("/login")
-async def login(login_req: LoginRequest):
+async def shared_login(login_req: LoginRequest):
     user_id = verify_user(login_req.username, login_req.password)
     if user_id:
-        payload = {
-            "user_id": user_id,
-            "username": login_req.username,
-            "exp": datetime.utcnow() + timedelta(hours=1)
-        }
+        payload = {"user_id": user_id, "username": login_req.username, "exp": datetime.utcnow() + timedelta(hours=1)}
         token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
         return {"token": token}
     else:
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
+app.add_api_route("/signup", shared_signup, methods=["POST"])
+app.add_api_route("/login", shared_login, methods=["POST"])
+
+customer_app.add_api_route("/signup", shared_signup, methods=["POST"])
+customer_app.add_api_route("/login", shared_login, methods=["POST"])
+
 # -----------------------
 # Conversation Endpoints
 # -----------------------
-@app.get("/conversations")
-async def get_conversations(current_user: int = Depends(get_current_user)):
-    """
-    Return a JSON-serializable list of user conversations.
-    """
+async def shared_get_conversations(current_user: int = Depends(get_current_user)):
     def _get_convos():
         rows = get_user_conversations(current_user)
         return [dict(r) for r in rows]
-
     loop = asyncio.get_event_loop()
     conversations = await loop.run_in_executor(db_pool, _get_convos)
     return {"conversations": conversations}
 
-@app.get("/conversations/{conversation_id}")
-async def get_conversation_detail(conversation_id: str, current_user: int = Depends(get_current_user)):
-    """
-    Return the messages for a single conversation, if the user is authorized.
-    """
+async def shared_get_conversation_detail(conversation_id: str, current_user: int = Depends(get_current_user)):
     def _check_access_and_get_convo():
         conn = get_db_connection()
         cursor = conn.execute(
@@ -293,20 +332,22 @@ async def get_conversation_detail(conversation_id: str, current_user: int = Depe
             return None
         rows = get_conversation(conversation_id)
         return [dict(r) for r in rows]
-
     loop = asyncio.get_event_loop()
     messages = await loop.run_in_executor(db_pool, _check_access_and_get_convo)
-
     if messages is None:
         raise HTTPException(status_code=403, detail="Not authorized to access this conversation")
-    
     return {"messages": messages}
+
+app.add_api_route("/conversations", shared_get_conversations, methods=["GET"])
+app.add_api_route("/conversations/{conversation_id}", shared_get_conversation_detail, methods=["GET"])
+
+customer_app.add_api_route("/conversations", shared_get_conversations, methods=["GET"])
+customer_app.add_api_route("/conversations/{conversation_id}", shared_get_conversation_detail, methods=["GET"])
 
 # -----------------------
 # Models Endpoints
 # -----------------------
-@app.get("/ollama-models")
-async def get_ollama_models():
+async def shared_get_ollama_models():
     """
     List local models available to Ollama.
     """
@@ -318,44 +359,96 @@ async def get_ollama_models():
         logger.exception(f"Error fetching Ollama models: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/openai-models")
-async def get_openai_models():
+async def shared_get_openai_models(request: Request):
     """
-    Return a static list of recognized "OpenAI" model names.
+    Return a list of recognized OpenAI model names. 
+    - Includes pro models only if 'openai.pro_models_allowed' is true.
+    - Includes fine-tuned models only if 'openai.fine_tuned_models_allowed' is true.
     """
+    # Check pro models permission
+    pro_models_allowed = await get_value(request.app, "openai.pro_models_allowed")
+    if pro_models_allowed is None:
+        pro_models_allowed = False
+
+    # Check fine-tuned models permission
+    fine_tuned_models_allowed = await get_value(request.app, "openai.fine_tuned_models_allowed")
+    if fine_tuned_models_allowed is None:
+        fine_tuned_models_allowed = False
+
+    # Create a quick OpenAI interface to list models and fine-tunes
     openai_interface = OpenAIInterface(model="gpt-4o-mini")
     if not openai_interface.is_api_key_configured():
+        # If API key not available, just return an empty list
         return {"models": []}
-        
-    models = [
+
+    # Base list of non-pro models (always included)
+    non_pro_models = [
         {"NAME": "o3-mini-high"},
         {"NAME": "o3-mini-medium"},
         {"NAME": "o3-mini-low"},
         {"NAME": "o1-preview"},
         {"NAME": "gpt-4o"},
-        {"NAME": "gpt-4o-mini"}
+        {"NAME": "gpt-4o-mini"},
+        {"NAME": "gpt-4o-mini-search-preview"},
+        {"NAME": "gpt-4o-search-preview"}
     ]
-    return {"models": models}
+
+    # If pro models are allowed
+    pro_models = []
+    if pro_models_allowed:
+        # Example pro models
+        pro_models = [
+            {"NAME": "gpt-4.5-preview"}
+            # o1-pro is exclusive to the Response API (this service is Chat Completion based)
+        ]
+
+    # Combine base + pro
+    all_models = non_pro_models + pro_models
+
+    # If fine-tuned models are allowed, fetch them
+    if fine_tuned_models_allowed:
+        try:
+            fine_tuning_jobs = await openai_interface.list_fine_tuning_jobs()
+            fine_tuned_ids = openai_interface.get_successful_fine_tuned_models(fine_tuning_jobs)
+            fine_tuned_list = [{"NAME": model_id} for model_id in fine_tuned_ids]
+            all_models += fine_tuned_list
+        except Exception as e:
+            logger.warning(f"Could not retrieve fine-tuned models: {e}")
+
+    return {"models": all_models}
+
+app.add_api_route("/ollama-models", shared_get_ollama_models, methods=["GET"])
+app.add_api_route("/openai-models", shared_get_openai_models, methods=["GET"])
+
+customer_app.add_api_route("/ollama-models", shared_get_ollama_models, methods=["GET"])
+customer_app.add_api_route("/openai-models", shared_get_openai_models, methods=["GET"])
 
 # -----------------------
 # Chat Completion Endpoint
 # -----------------------
-@app.post("/chat-completion")
 async def chat_completion(
     chat_req: ChatRequest,
     request: Request,
     background_tasks: BackgroundTasks,
     current_user: Optional[int] = Depends(get_optional_current_user)
-):
+) -> JSONResponse | StreamingResponse:
     """
-    Chat completion endpoint with concurrency and fallback handling.
+    Chat completion endpoint with support for multiple backup models.
+    Handles vision, streaming, and non-streaming requests with fallback logic.
+
+    Args:
+        chat_req: The ChatRequest object containing model, backup_models, messages, etc.
+        request: The FastAPI Request object.
+        background_tasks: FastAPI BackgroundTasks for scheduling tasks.
+        current_user: Optional user ID from authentication.
+
+    Returns:
+        JSONResponse for non-streaming/vision requests, StreamingResponse for streaming requests.
     """
-    # Limit concurrent model calls with a semaphore
     async with request.app.state.model_semaphore:
         try:
-            # Determine conversation ID based on user authentication
+            # **Conversation ID Handling**
             if current_user and chat_req.conversation_id:
-                # Use a synchronous function for DB check
                 def check_conversation_access_sync():
                     conn = get_db_connection()
                     cursor = conn.execute(
@@ -369,56 +462,72 @@ async def chat_completion(
                 if not row or row['user_id'] != current_user:
                     raise HTTPException(status_code=403, detail="Not authorized to access this conversation")
                 conversation_id = chat_req.conversation_id
-
             elif current_user:
-                # Create a new conversation for authenticated users without an ID
                 def create_new_conversation_sync():
                     return create_conversation(current_user, chat_req.messages)
 
                 loop = asyncio.get_event_loop()
                 conversation_id = await loop.run_in_executor(db_pool, create_new_conversation_sync)
             else:
-                # No conversation tracking for unauthenticated users
                 conversation_id = None
 
-            primary_interface = await get_interface(request.app, chat_req.model)
-            backup_interface = await get_interface(request.app, chat_req.backup_model) if chat_req.backup_model else None
+            # **Normalize backup_models for Backward Compatibility**
+            backup_models = []
+            if chat_req.backup_models:
+                if isinstance(chat_req.backup_models, str):
+                    backup_models = [chat_req.backup_models]  # Convert single string to list
+                else:
+                    backup_models = chat_req.backup_models
 
-            # Prepare images if provided
+            # List of models to try: primary model followed by backups
+            models_to_try = [chat_req.model] + backup_models
+
+            # **Prepare Images if Provided**
             images = chat_req.image_b64 if chat_req.image_b64 else None
             if images and not isinstance(images, list):
                 images = [images]
+            cleaned_images = [img.split(",")[1] if "," in img else img for img in images] if images else None
 
             conversation_history = [m.model_dump() for m in chat_req.messages]
+            prompt = " ".join([m.content for m in chat_req.messages if m.role == "user"]) if images else None
 
-            # Handle vision requests (for Ollama)
-            if isinstance(primary_interface, AsyncOllamaInterface) and images:
-                cleaned_images = [img.split(",")[1] if "," in img else img for img in images]
-                prompt = " ".join([m.content for m in chat_req.messages if m.role == "user"])
+            # **Handle Vision Requests (Non-Streaming)**
+            if images:
+                content = None
                 backup_used = False
+                for idx, model in enumerate(models_to_try):
+                    interface = await get_interface(request.app, model)
+                    try:
+                        if isinstance(interface, AsyncOllamaInterface):
+                            response = await interface.send_vision(prompt, cleaned_images)
+                        elif isinstance(interface, OpenAIInterface):
+                            vision_messages = [
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "text", "text": prompt},
+                                        *[
+                                            {
+                                                "type": "image_url",
+                                                "image_url": {"url": f"data:image/jpeg;base64,{img}"}
+                                            }
+                                            for img in cleaned_images
+                                        ]
+                                    ]
+                                }
+                            ]
+                            response = await interface.send_chat_nonstreaming(vision_messages)
+                        if "error" not in response:
+                            content = interface.extract_content_from_response(
+                                response, is_chat=isinstance(interface, OpenAIInterface)
+                            )
+                            backup_used = idx > 0
+                            break
+                    except Exception as e:
+                        logger.warning(f"Model {model} failed for vision request: {e}")
 
-                try:
-                    response = await primary_interface.send_vision(prompt, cleaned_images)
-                    if "error" in response:
-                        logger.error(f"Primary model vision failed: {response['error']}")
-                        if backup_interface and backup_interface._supports("image"):
-                            content = await _fallback_vision(backup_interface, prompt, cleaned_images)
-                            backup_used = True
-                        else:
-                            raise ValueError("Primary vision failed, no backup available")
-                    else:
-                        content = primary_interface.extract_content_from_response(response, is_chat=False)
-                except Exception as e:
-                    logger.exception(f"Vision request failed: {e}")
-                    if backup_interface and backup_interface._supports("image"):
-                        try:
-                            content = await _fallback_vision(backup_interface, prompt, cleaned_images)
-                            backup_used = True
-                        except Exception as backup_err:
-                            logger.exception(f"Backup vision model failed: {backup_err}")
-                            raise HTTPException(status_code=500, detail="Both primary and backup vision models failed")
-                    else:
-                        raise HTTPException(status_code=500, detail="Vision model failed and no backup available")
+                if content is None:
+                    raise HTTPException(status_code=500, detail="All models failed for vision request")
 
                 messages = chat_req.messages + [ChatMessage(role="assistant", content=content)]
                 if conversation_id:
@@ -440,78 +549,70 @@ async def chat_completion(
                 headers = {"X-Conversation-ID": conversation_id} if conversation_id else {}
                 return JSONResponse(content={"message": content}, headers=headers)
 
-            # Handle streaming chat requests
-            if chat_req.stream:
+            # **Handle Streaming Chat Requests**
+            elif chat_req.stream:
                 full_response = []
-                try_backup = False
-                backup_activated = False
+                selected_interface = None
+                stream_generator = None
+                first_content = None
+                backup_used = False
+
+                # Select the first model that successfully provides an initial chunk
+                for idx, model in enumerate(models_to_try):
+                    interface = await get_interface(request.app, model)
+                    try:
+                        stream_generator = interface.send_chat_streaming(conversation_history)
+                        first_chunk = await stream_generator.__anext__()
+                        if "error" not in first_chunk:
+                            selected_interface = interface
+                            first_content = selected_interface.extract_content_from_chunk(first_chunk)
+                            if first_content:
+                                full_response.append(first_content)
+                            backup_used = idx > 0
+                            break
+                    except Exception as e:
+                        logger.warning(f"Model {model} failed to start streaming: {e}")
+                        continue
+                else:
+                    raise HTTPException(status_code=500, detail="All models failed to start streaming")
 
                 async def streamer() -> AsyncGenerator[bytes, None]:
-                    nonlocal try_backup, backup_activated, full_response
-                    primary_stream_id = None
-                    backup_stream_id = None
+                    remaining_models = models_to_try.copy()  # List of models to try (e.g., ["openai", "backup1", "backup2"])
+                    current_model_index = 0
+                    full_response = []  # Track the conversation so far
 
-                    try:
+                    while current_model_index < len(remaining_models):
+                        model = remaining_models[current_model_index]
+                        interface = await get_interface(request.app, model)
                         try:
-                            stream_generator = primary_interface.send_chat_streaming(conversation_history)
-                            primary_stream_id = id(stream_generator)
-                            request.app.state.active_streams.add(primary_stream_id)
-
+                            # Start streaming with the current model
+                            stream_generator = interface.send_chat_streaming(conversation_history)
                             async for chunk in stream_generator:
                                 if "error" in chunk:
-                                    logger.warning(f"Error in primary model stream: {chunk.get('error')}")
-                                    try_backup = True
-                                    break
-                                content = primary_interface.extract_content_from_chunk(chunk)
+                                    raise ValueError(f"Error in chunk: {chunk['error']}")
+                                content = interface.extract_content_from_chunk(chunk)
                                 if content:
                                     full_response.append(content)
                                     yield (json.dumps({"message": content}) + "\n").encode("utf-8")
+                            break  # If streaming completes successfully, exit the loop
                         except Exception as e:
-                            logger.exception(f"Error in primary model stream: {e}")
-                            try_backup = True
-                        finally:
-                            if primary_stream_id in request.app.state.active_streams:
-                                request.app.state.active_streams.remove(primary_stream_id)
-
-                        if try_backup and backup_interface:
-                            try:
-                                backup_activated = True
-                                assistant_partial = "".join(full_response)
-                                updated_history = conversation_history
-                                if assistant_partial.strip():
-                                    updated_history = conversation_history + [
-                                        {"role": "assistant", "content": assistant_partial}
-                                    ]
-                                backup_stream = backup_interface.send_chat_streaming(updated_history)
-                                backup_stream_id = id(backup_stream)
-                                request.app.state.active_streams.add(backup_stream_id)
-
-                                async for chunk in backup_stream:
-                                    if "error" in chunk:
-                                        logger.warning(f"Error in backup model stream: {chunk.get('error')}")
-                                        raise HTTPException(status_code=500, detail="Both primary and backup models failed")
-                                    content = backup_interface.extract_content_from_chunk(chunk)
-                                    if content:
-                                        full_response.append(content)
-                                        yield (json.dumps({"message": content}) + "\n").encode("utf-8")
-                            except Exception as e2:
-                                logger.exception(f"Error in backup model stream: {e2}")
-                                raise HTTPException(status_code=500, detail="Both primary and backup models failed")
-                            finally:
-                                if backup_stream_id in request.app.state.active_streams:
-                                    request.app.state.active_streams.remove(backup_stream_id)
-                    except Exception as outer_e:
-                        logger.exception(f"Unhandled exception in streamer: {outer_e}")
-                        return
+                            logger.warning(f"Model {model} failed during streaming: {e}")
+                            current_model_index += 1  # Move to the next model
+                            if current_model_index < len(remaining_models):
+                                logger.info(f"Switching to backup model: {remaining_models[current_model_index]}")
+                                # Optionally update conversation_history with full_response to continue where it left off
+                                conversation_history.append({"role": "assistant", "content": "".join(full_response)})
+                            else:
+                                raise HTTPException(status_code=500, detail="All models failed during streaming")
 
                 async def save_conversation_async():
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(1)  # Delay to allow streaming to complete
                     def db_save():
                         combined = "".join(full_response)
                         msgs = chat_req.messages + [ChatMessage(role="assistant", content=combined)]
                         if conversation_id:
                             update_conversation(conversation_id, msgs)
-                            if backup_activated:
+                            if backup_used:
                                 conn = get_db_connection()
                                 conn.execute(
                                     'UPDATE conversations SET backup_used = ? WHERE conversation_id = ?',
@@ -526,42 +627,30 @@ async def chat_completion(
 
                 headers = {"X-Conversation-ID": conversation_id} if conversation_id else {}
                 return StreamingResponse(streamer(), media_type="application/json", headers=headers)
+
+            # **Handle Non-Streaming Chat Requests**
             else:
+                content = None
                 backup_used = False
-                try:
-                    response = await primary_interface.send_chat_nonstreaming(conversation_history)
-                    if "error" in response:
-                        logger.warning(f"Primary model failed: {response.get('error')}")
-                        if not backup_interface:
-                            raise HTTPException(status_code=500, detail="Primary model failed and no backup provided")
-                        backup_used = True
-                        response = await backup_interface.send_chat_nonstreaming(conversation_history)
-                        if "error" in response:
-                            raise HTTPException(status_code=500, detail="Both primary and backup models failed")
-                    else:
-                        content = primary_interface.extract_content_from_response(response, is_chat=True)
-                except Exception as e:
-                    logger.exception(f"Error with primary model: {e}")
-                    if not backup_interface:
-                        raise HTTPException(status_code=500, detail=f"Primary model failed: {str(e)}")
+                for idx, model in enumerate(models_to_try):
+                    interface = await get_interface(request.app, model)
                     try:
-                        backup_used = True
-                        response = await backup_interface.send_chat_nonstreaming(conversation_history)
-                        if "error" in response:
-                            raise HTTPException(status_code=500, detail="Both primary and backup models failed")
-                    except Exception as backup_e:
-                        logger.exception(f"Backup model failed: {backup_e}")
-                        raise HTTPException(status_code=500, detail="Both primary and backup models failed")
+                        response = await interface.send_chat_nonstreaming(conversation_history)
+                        if "error" not in response:
+                            content = interface.extract_content_from_response(response, is_chat=True)
+                            backup_used = idx > 0
+                            break
+                    except Exception as e:
+                        logger.warning(f"Model {model} failed for chat request: {e}")
 
-                content = (backup_interface if backup_used else primary_interface).extract_content_from_response(
-                    response, is_chat=True
-                )
+                if content is None:
+                    raise HTTPException(status_code=500, detail="All models failed for chat request")
 
-                msgs = chat_req.messages + [ChatMessage(role="assistant", content=content)]
+                messages = chat_req.messages + [ChatMessage(role="assistant", content=content)]
                 if conversation_id:
                     async def save_conversation_async():
                         def db_save():
-                            update_conversation(conversation_id, msgs)
+                            update_conversation(conversation_id, messages)
                             if backup_used:
                                 conn = get_db_connection()
                                 conn.execute(
@@ -581,6 +670,9 @@ async def chat_completion(
             logger.exception(f"Unhandled error in chat completion: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
+app.add_api_route("/chat-completion", chat_completion, methods=['POST'], response_model=None)
+
+customer_app.add_api_route("/chat-completion", chat_completion, methods=['POST'], response_model=None)
 # -----------------------
 # Helper for Vision Fallback
 # -----------------------
@@ -607,28 +699,78 @@ async def _fallback_vision(interface, prompt, images):
 # -----------------------
 # Static File Endpoints
 # -----------------------
-@app.get("/", response_class=FileResponse)
-async def get_index():
+async def shared_get_index():
     return FileResponse("static/index.html")
 
-@app.get("/favicon.ico", include_in_schema=False)
-async def favicon():
+async def shared_favicon():
     return FileResponse("static/favicon.ico")
 
+async def shared_get_styles():
+    return FileResponse("static/styles.css")
+
+app.add_api_route("/", shared_get_index, response_class=FileResponse, methods=["GET"])
+app.add_api_route("/favicon.ico", shared_favicon, include_in_schema=False, methods=["GET"])
+app.add_api_route("/styles.css", shared_get_styles, response_class=FileResponse, methods=["GET"])
+
+customer_app.add_api_route("/", shared_get_index, response_class=FileResponse, methods=["GET"])
+customer_app.add_api_route("/favicon.ico", shared_favicon, include_in_schema=False, methods=["GET"])
+customer_app.add_api_route("/styles.css", shared_get_styles, response_class=FileResponse, methods=["GET"])
+
+# ----------------------
+# Config Management
+# ----------------------
+@app.get("/api/config/{key}")
+async def get_config_value(key: str, request: Request, current_user: int = Depends(get_current_user)):
+    """
+    Retrieve a configuration value by key.
+    """
+    # Optionally enforce role-based logic here if only admins can read config, etc.
+    # e.g., if current_user != <admin_user_id>: raise HTTPException(403, "Not authorized")
+
+    value = await get_value(request.app, key)
+    if value is None:
+        raise HTTPException(status_code=404, detail=f"Config key '{key}' not found")
+
+    return JSONResponse(content={"key": key, "value": value})
+
+@app.post("/api/config/{key}")
+async def set_config_value(key: str, data: ConfigUpdate, request: Request, current_user: int = Depends(get_current_user)):
+    """
+    Set or update a configuration value by key.
+    """
+    # Optionally enforce role-based logic here if only admins can write config, etc.
+    # e.g., if current_user != <admin_user_id>: raise HTTPException(403, "Not authorized")
+
+    try:
+        await set_value(request.app, key, data.value)
+        return JSONResponse(content={"message": f"Config key '{key}' updated successfully"})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # -----------------------
-# Server Configuration
+# Server Initialization
 # -----------------------
+async def main():
+    customer_config = Config(
+        app=customer_app,
+        host="0.0.0.0",
+        port=23323,
+        limit_concurrency=100,
+        timeout_keep_alive=120,
+    )
+    customer_server = Server(customer_config)
+
+    full_config = Config(
+        app=app,
+        host="0.0.0.0",
+        port=8000,
+        limit_concurrency=100,
+        timeout_keep_alive=300,
+    )
+    full_server = Server(full_config)
+
+    # Run both servers concurrently
+    await asyncio.gather(customer_server.serve(), full_server.serve())
+
 if __name__ == "__main__":
-    import uvicorn
-    
-    config = {
-        "app": "server:app",
-        "host": "0.0.0.0",
-        "port": 8000,
-        "reload": True,
-        "limit_concurrency": 100,
-        "timeout_keep_alive": 120,
-        "workers": 1
-    }
-    
-    uvicorn.run(**config)
+    asyncio.run(main())

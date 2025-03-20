@@ -1,0 +1,6 @@
+{
+    "openai": {
+        "pro_models_allowed": true,
+        "fine_tuned_models_allowed": true
+    }
+}

@@ -12,6 +12,8 @@ def get_db_connection():
 
 def init_db():
     conn = get_db_connection()
+    
+    # Create the users table if it doesn't exist
     conn.execute('''
     CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -20,6 +22,9 @@ def init_db():
         salt TEXT
     )
     ''')
+    
+    # Create the conversations table if it doesn't exist.
+    # Note: If the table already exists from an earlier version, the column won't be added automatically.
     conn.execute('''
     CREATE TABLE IF NOT EXISTS conversations (
         conversation_id TEXT PRIMARY KEY,
@@ -28,9 +33,17 @@ def init_db():
         created_at DATETIME,
         updated_at DATETIME,
         messages_json TEXT,
+        backup_used INTEGER DEFAULT 0,
         FOREIGN KEY (user_id) REFERENCES users(user_id)
     )
     ''')
+    
+    # Check if the backup_used column exists; if not, add it.
+    cursor = conn.execute("PRAGMA table_info(conversations)")
+    columns = [row["name"] for row in cursor.fetchall()]
+    if "backup_used" not in columns:
+        conn.execute("ALTER TABLE conversations ADD COLUMN backup_used INTEGER DEFAULT 0")
+    
     conn.commit()
     conn.close()
 
