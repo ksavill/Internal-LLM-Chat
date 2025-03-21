@@ -79,6 +79,7 @@ async def lifespan(app):
 
     # Initialize config and lock
     app.state.config_lock = asyncio.Lock()
+    app.state.openai_interface_lock = asyncio.Lock()
     await load_config(app)
 
     # Create a semaphore to limit concurrent model requests
@@ -262,7 +263,10 @@ async def get_interface(app: FastAPI, model_name: str):
     ]
 
     # Determine if the model is an OpenAI model
-    is_openai = any(model_name.startswith(prefix) for prefix in openai_prefixes)
+    if model_name.startswith("ft:"):
+        is_openai = True
+    else:
+        is_openai = any(model_name.startswith(prefix) for prefix in openai_prefixes)
 
     if is_openai:
         # Check if it's a pro model and if pro models are allowed
