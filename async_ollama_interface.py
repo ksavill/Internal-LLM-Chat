@@ -38,7 +38,12 @@ class AsyncOllamaInterface:
         """
         return chunk.get("message", {}).get("content", "")
 
-    async def send_chat_streaming(self, messages: List[Dict[str, Any]], **kwargs) -> AsyncGenerator[Dict[str, Any], None]:
+    async def send_chat_streaming(
+            self, 
+            messages: List[Dict[str, Any]], 
+            timeout_threshold: float = 30.0,
+            **kwargs
+        ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Streaming chat request without timeout, as Ollama is local and fast.
         """
