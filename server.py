@@ -17,7 +17,7 @@ from uvicorn import Config, Server
 
 # Local imports
 from async_ollama_interface import AsyncOllamaInterface
-from proxy_interface import ProxyInterface
+# from proxy_interface import ProxyInterface # This will be unused code for the forseeable future. We would need to ensure that our response can mimic that of a raw streamed response if in proxy mode
 from openai_api import OpenAIInterface
 from config import load_config, get_value, set_value
 from model_whitelist import is_model_allowed
@@ -386,9 +386,18 @@ async def shared_get_openai_models(request: Request):
         return {"models": []}
 
     non_pro_models = [
-        {"NAME": "o3-mini-high"}, {"NAME": "o3-mini-medium"}, {"NAME": "o3-mini-low"},
-        {"NAME": "o1-preview"}, {"NAME": "gpt-4o"}, {"NAME": "gpt-4o-mini"},
-        {"NAME": "gpt-4o-mini-search-preview"}, {"NAME": "gpt-4o-search-preview"}
+        {"NAME": "gpt-3.5-turbo"},
+        {"NAME": "gpt-4o"},
+        {"NAME": "gpt-4o-mini"},
+        {"NAME": "gpt-4o-mini-search-preview"},
+        {"NAME": "gpt-4o-search-preview"},
+        {"NAME": "gpt-4.1"},
+        {"NAME": "gpt-4.1-mini"},
+        {"NAME": "gpt-4.1-nano"},
+        {"NAME": "o1-preview"},
+        {"NAME": "o3-mini-high"},
+        {"NAME": "o3-mini-medium"},
+        {"NAME": "o3-mini-low"},
     ]
 
     if pro_models_allowed:
@@ -414,6 +423,7 @@ async def shared_get_openai_models(request: Request):
 
     whitelisted_models = [m for m in all_models if is_model_allowed(m["NAME"])]
     logger.info(f"Retrieved {len(whitelisted_models)} OpenAI models after filtering")
+
     return {"models": whitelisted_models}
 
 @app.get("/request-profiles", response_model=List[str])
@@ -450,7 +460,7 @@ def append_new_user_messages(db_msgs: List[ChatMessage], incoming_msgs: List[Cha
     tail = incoming_msgs[len(db_msgs):]
     return db_msgs + tail
 
-
+@app.post("/chat-completion", response_model=ChatCompletionResponse)
 @app.post("/api/chat/completion", response_model=ChatCompletionResponse)
 async def chat_completion(
     chat_req: ChatRequest,
@@ -469,8 +479,6 @@ async def chat_completion(
         previous_response_id: Optional[str] = None
         if current_user and chat_req.conversation_id:
             def load_prev_response_id():
-                # get_conversation_openai_response_id is imported from database
-                from database import get_conversation_openai_response_id
                 return get_conversation_openai_response_id(chat_req.conversation_id)
             previous_response_id = await loop.run_in_executor(db_pool, load_prev_response_id)
             logger.info(f"Found previous_response_id: {previous_response_id} for conversation {chat_req.conversation_id}")
@@ -808,7 +816,7 @@ async def main():
     customer_config = Config(
         app=customer_app,
         host="0.0.0.0",
-        port=23323,
+        port=41025,
         limit_concurrency=100,
         timeout_keep_alive=120,
     )
