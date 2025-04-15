@@ -43,6 +43,9 @@ def init_db():
     columns = [row["name"] for row in cursor.fetchall()]
     if "backup_used" not in columns:
         conn.execute("ALTER TABLE conversations ADD COLUMN backup_used INTEGER DEFAULT 0")
+
+    if "openai_response_id" not in columns:
+         conn.execute("ALTER TABLE conversations ADD COLUMN openai_response_id TEXT DEFAULT NULL")
     
     conn.commit()
     conn.close()
@@ -96,15 +99,25 @@ def create_conversation(user_id, messages):
     conn.close()
     return conversation_id
 
-def update_conversation(conversation_id, messages):
+def update_conversation(conversation_id, messages, openai_response_id=None):
     conn = get_db_connection()
     updated_at = datetime.now()
     messages_json = json.dumps([m.dict() for m in messages])
-    conn.execute('''
-    UPDATE conversations
-    SET messages_json = ?, updated_at = ?
-    WHERE conversation_id = ?
-    ''', (messages_json, updated_at, conversation_id))
+    
+    # If openai_response_id is provided, update that field as well
+    if openai_response_id:
+        conn.execute("""
+        UPDATE conversations
+        SET messages_json = ?, updated_at = ?, openai_response_id = ?
+        WHERE conversation_id = ?
+        """, (messages_json, updated_at, openai_response_id, conversation_id))
+    else:
+        conn.execute("""
+        UPDATE conversations
+        SET messages_json = ?, updated_at = ?
+        WHERE conversation_id = ?
+        """, (messages_json, updated_at, conversation_id))
+    
     conn.commit()
     conn.close()
 
@@ -138,3 +151,18 @@ def get_preview(messages):
         if m.role == "user":
             return m.content[:50]
     return ""
+
+def get_conversation_openai_response_id(conversation_id):
+    """
+    Retrieve the OpenAI response ID for a specific conversation.
+    Used when sending follow-up requests to the OpenAI Responses API.
+    """
+    conn = get_db_connection()
+    cursor = conn.execute('''
+    SELECT openai_response_id
+    FROM conversations
+    WHERE conversation_id = ?
+    ''', (conversation_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row['openai_response_id'] if row and row['openai_response_id'] else None

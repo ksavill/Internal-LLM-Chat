@@ -1,0 +1,10 @@
+{
+  "default_profile": {
+    "model": "gpt-4o",
+    "backup_models": ["gpt-3.5-turbo", "qwen2.5-coder:7b"]
+  },
+  "fast_profile": {
+    "model": "gpt-3.5-turbo",
+    "backup_models": ["qwen2.5-coder:7b"]
+  }
+}

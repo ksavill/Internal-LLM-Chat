@@ -1,0 +1,8 @@
+{
+    "allowed_models": [
+        "gpt-4o",
+        "gpt-4o-mini",
+        "llama3.2:1b",
+        "llama3.2:latest"
+    ]
+}
