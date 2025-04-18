@@ -175,11 +175,12 @@
     
     // Code block detection patterns
     const codeFencePatterns = [
-      /^```(?:([a-zA-Z0-9_+\-.]+))?$/,  // Triple backticks with optional language
-      /^~~~(?:([a-zA-Z0-9_+\-.]+))?$/,  // Triple tildes with optional language
-      /^-{3,}$/,                       // Three or more hyphens
-      /^={3,}$/,                       // Three or more equals signs
-      /^_{3,}$/                        // Three or more underscores
+      /^```(?:([a-zA-Z0-9_+\-.]+))?$/,    // ```lang
+      /^~~~(?:([a-zA-Z0-9_+\-.]+))?$/,    // ~~~lang
+      /^-{3,}$/,                          // --- (3+)
+      /^={3,}$/,                          // === (3+)
+      /^_{3,}$/,                          // ___ (3+)
+      /^[\u2500]{20,}$/                   // ────… (20+ “box‑drawing” chars → o1‑pro)
     ];
 
     // Common language name mappings for better syntax highlighting

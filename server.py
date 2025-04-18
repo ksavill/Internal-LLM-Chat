@@ -398,6 +398,8 @@ async def shared_get_openai_models(request: Request):
         {"NAME": "o3-mini-high"},
         {"NAME": "o3-mini-medium"},
         {"NAME": "o3-mini-low"},
+        {"NAME": "o3"},
+        {"NAME": "o3-high"},
     ]
 
     if pro_models_allowed:
