@@ -11,6 +11,14 @@
   <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+  
+  <!-- KaTeX for LaTeX rendering -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.15.3/katex.min.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.15.3/katex.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.15.3/contrib/auto-render.min.js"></script>
+  
+  <!-- Marked.js for better Markdown parsing -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
 </head>
 <body>
   <div class="app-container">
@@ -138,1471 +146,1807 @@
   
   <script>
     // -----------------------------------------------------
-    // GLOBAL VARIABLES & STATE
-    // -----------------------------------------------------
-    const chatWindow = document.getElementById('chat-window');
-    const userInput = document.getElementById('user-input');
-    const sendButton = document.getElementById('send-button');
-    const modelSelect = document.getElementById('model-select');
-    const backupModelSelect = document.getElementById('backup-model-select');
-    const timeoutThresholdInput = document.getElementById('timeout-threshold');
-    const newChatButton = document.getElementById('new-chat-button');
-    const exportChatButton = document.getElementById('export-chat-button');
-    const importFileInput = document.getElementById('import-file-input');
-    const imagePreviewContainer = document.getElementById('image-preview-container');
-    const sidebar = document.getElementById('sidebar');
-    const toggleSidebarButton = document.getElementById('toggle-sidebar-button');
+// GLOBAL VARIABLES & STATE
+// -----------------------------------------------------
+const chatWindow = document.getElementById('chat-window');
+const userInput = document.getElementById('user-input');
+const sendButton = document.getElementById('send-button');
+const modelSelect = document.getElementById('model-select');
+const backupModelSelect = document.getElementById('backup-model-select');
+const timeoutThresholdInput = document.getElementById('timeout-threshold');
+const newChatButton = document.getElementById('new-chat-button');
+const exportChatButton = document.getElementById('export-chat-button');
+const importFileInput = document.getElementById('import-file-input');
+const imagePreviewContainer = document.getElementById('image-preview-container');
+const sidebar = document.getElementById('sidebar');
+const toggleSidebarButton = document.getElementById('toggle-sidebar-button');
 
-    let conversation = [];
-    let currentModel = null;
-    let currentBackupModel = null;
-    let currentConversationId = null;
-    let leftoverLine = "";
-    let currentBotMessageGroup = null;
-    let currentBotMessageContainer = null;
-    let currentPartialTextElement = null;
-    let inCodeBlock = false;
-    let currentCodeElement = null;
-    let codeLines = [];
-    let currentCodeBlockContainer = null;
-    let thinkBlocks = [];
-    let currentThinkBlock = null;
-    let inThinkBlock = false;
-    let pastedImages = [];
-    let nextImageId = 0;
-    let activeAbortControllers = [];
-    let currentRequestController = null;
-    
-    // Code block detection patterns
-    const codeFencePatterns = [
-      /^```(?:([a-zA-Z0-9_+\-.]+))?$/,   // ```lang
-      /^~~~(?:([a-zA-Z0-9_+\-.]+))?$/,   // ~~~lang
-      /^-{3,}$/,                         // --- (3+)
-      /^={3,}$/,                         // === (3+)
-      /^_{3,}$/,                         // ___ (3+)
-      /^[\u2500\u2501]{20,}$/            // ──────…  OR  ━━━━━━…  (20+ chars)
-    ];
+let conversation = [];
+let currentModel = null;
+let currentBackupModel = null;
+let currentConversationId = null;
+let leftoverLine = "";
+let currentBotMessageGroup = null;
+let currentBotMessageContainer = null;
+let currentPartialTextElement = null;
+let inCodeBlock = false;
+let currentCodeElement = null;
+let codeLines = [];
+let currentCodeBlockContainer = null;
+let thinkBlocks = [];
+let currentThinkBlock = null;
+let inThinkBlock = false;
+let pastedImages = [];
+let nextImageId = 0;
+let activeAbortControllers = [];
+let currentRequestController = null;
+let pendingLines = []; // Track lines that might be code but not confirmed yet
 
-    // Common language name mappings for better syntax highlighting
-    const languageAliases = {
-      'js': 'javascript',
-      'ts': 'typescript',
-      'py': 'python',
-      'rb': 'ruby',
-      'sh': 'bash',
-      'c#': 'csharp',
-      'c++': 'cpp',
-      'html+php': 'php',
-      'md': 'markdown',
-      'rust': 'rust',
-      'go': 'go',
-      'cs': 'csharp',
-      'yml': 'yaml',
-      'json': 'json',
-      'jsx': 'jsx',
-      'tsx': 'tsx',
-      'css': 'css',
-      'sass': 'sass',
-      'scss': 'scss',
-      'sql': 'sql',
-      'shell': 'bash'
-    };
+// Code block detection patterns
+const codeFencePatterns = [
+  /^```(?:([a-zA-Z0-9_+\-.]+))?$/,   // ```lang
+  /^~~~(?:([a-zA-Z0-9_+\-.]+))?$/,   // ~~~lang
+  /^-{3,}$/,                         // --- (3+)
+  /^={3,}$/,                         // === (3+)
+  /^_{3,}$/                          // ___ (3+)
+];
 
-    // -----------------------------------------------------
-    // ON LOAD: FETCH MODELS & INITIAL AUTH/SIDEBAR SETUP
-    // -----------------------------------------------------
-    window.onload = async function() {
-      await fetchAndPopulateOllamaModels();
-      await fetchAndPopulateOpenaiModels();
-      setPreferredModel();
-      updateAuthButtons();
-      fetchConversations();
-      
-      // Setup modal listeners
-      document.querySelectorAll('.close-modal').forEach(button => {
-        button.addEventListener('click', () => {
-          const modalId = button.dataset.modal;
-          document.getElementById(modalId).classList.remove('active');
-        });
-      });
+// File header pattern - more specific to avoid false positives with dashes
+const fileHeaderPattern = /^-{3,}\s*\n*File:\s*([^\n]+?)\s*\n*-{3,}$/i;
+const fileEndPattern = /^-{3,}\s*\n*End of File\s*\n*-{3,}$/i;
 
-      // Make textarea auto-resize
-      userInput.addEventListener('input', function() {
-        this.style.height = 'auto';
-        this.style.height = (this.scrollHeight) + 'px';
-      });
-    };
+// Common programming language signatures to help with detection
+const codeSignatures = {
+  python: [
+    /^import\s+[a-zA-Z0-9_]+/,
+    /^from\s+[a-zA-Z0-9_\.]+\s+import/,
+    /^def\s+[a-zA-Z0-9_]+\s*\(/,
+    /^class\s+[a-zA-Z0-9_]+/,
+    /^@[a-zA-Z0-9_\.]+/,
+    /^if\s+__name__\s*==\s*["']__main__["']\s*:/
+  ],
+  javascript: [
+    /^const\s+[a-zA-Z0-9_]+/,
+    /^let\s+[a-zA-Z0-9_]+/,
+    /^var\s+[a-zA-Z0-9_]+/,
+    /^function\s+[a-zA-Z0-9_]+\s*\(/,
+    /^import\s+[a-zA-Z0-9_]+\s+from/,
+    /^export\s+/,
+    /^class\s+[a-zA-Z0-9_]+/,
+    /=>\s*{/
+  ],
+  html: [
+    /^<!DOCTYPE/i,
+    /^<html/i,
+    /^<head/i,
+    /^<body/i
+  ],
+  css: [
+    /^[\.\#][a-zA-Z0-9_-]+\s*{/,
+    /^@media/,
+    /^@keyframes/
+  ],
+  bash: [
+    /^#!/,
+    /^apt-get/,
+    /^yum\s+/,
+    /^docker\s+/,
+    /^curl\s+/,
+    /^wget\s+/
+  ],
+  dockerfile: [
+    /^FROM\s+/,
+    /^RUN\s+/,
+    /^COPY\s+/,
+    /^ADD\s+/,
+    /^CMD\s+/,
+    /^ENTRYPOINT\s+/,
+    /^EXPOSE\s+/,
+    /^ENV\s+/,
+    /^WORKDIR\s+/
+  ]
+};
 
-    // Whenever the main model changes, auto-adjust the timeout if it’s in the large-model list.
-    function handleModelChange() {
-      const selectedModel = modelSelect.value.trim();
-      const largeModels = ["o1", "o1-pro", "o1-pro-high"];
-      
-      // If the selected model starts with or equals any item in largeModels, set threshold=999
-      if (largeModels.some(m => selectedModel === m || selectedModel.startsWith(m))) {
-        timeoutThresholdInput.value = "999";
-      } else {
-        timeoutThresholdInput.value = "30"; // Can comment this out if the user wants to preserve their timeout threshold
-      }
-    }
+// Common language name mappings for better syntax highlighting
+const languageAliases = {
+  'js': 'javascript',
+  'ts': 'typescript',
+  'py': 'python',
+  'rb': 'ruby',
+  'sh': 'bash',
+  'c#': 'csharp',
+  'c++': 'cpp',
+  'html+php': 'php',
+  'md': 'markdown',
+  'rust': 'rust',
+  'go': 'go',
+  'cs': 'csharp',
+  'yml': 'yaml',
+  'json': 'json',
+  'jsx': 'jsx',
+  'tsx': 'tsx',
+  'css': 'css',
+  'sass': 'sass',
+  'scss': 'scss',
+  'sql': 'sql',
+  'shell': 'bash'
+};
 
-    // Attach change listener to main model select
-    modelSelect.addEventListener('change', handleModelChange);
+// -----------------------------------------------------
+// ON LOAD: FETCH MODELS & INITIAL AUTH/SIDEBAR SETUP
+// -----------------------------------------------------
+window.onload = async function() {
+  await fetchAndPopulateOllamaModels();
+  await fetchAndPopulateOpenaiModels();
+  setPreferredModel();
+  updateAuthButtons();
+  fetchConversations();
+  
+  // Setup modal listeners
+  document.querySelectorAll('.close-modal').forEach(button => {
+    button.addEventListener('click', () => {
+      const modalId = button.dataset.modal;
+      document.getElementById(modalId).classList.remove('active');
+    });
+  });
 
-    // -----------------------------------------------------
-    // MODEL FETCH FUNCTIONS
-    // -----------------------------------------------------
-    async function fetchAndPopulateOllamaModels() {
-      try {
-        const response = await fetch('/ollama-models');
-        if (!response.ok) {
-          console.error('Failed to fetch Ollama models:', response.statusText);
-          return;
-        }
-        const data = await response.json();
-        if (data.models && Array.isArray(data.models)) {
-          data.models.forEach(model => {
-            // Primary model dropdown
-            const option = document.createElement('option');
-            option.value = model.NAME;
-            option.textContent = model.NAME;
-            option.setAttribute('data-source', 'ollama');
-            modelSelect.appendChild(option);
-            
-            // Backup model dropdown
-            const backupOption = document.createElement('option');
-            backupOption.value = model.NAME;
-            backupOption.textContent = model.NAME;
-            backupOption.setAttribute('data-source', 'ollama');
-            backupModelSelect.appendChild(backupOption);
-          });
-        } else {
-          console.error('Invalid Ollama models data:', data);
-        }
-      } catch (error) {
-        console.error('Error fetching Ollama models:', error);
-      }
-    }
+  // Make textarea auto-resize
+  userInput.addEventListener('input', function() {
+    this.style.height = 'auto';
+    this.style.height = (this.scrollHeight) + 'px';
+  });
+};
 
-    async function fetchAndPopulateOpenaiModels() {
-      try {
-        const response = await fetch('/openai-models');
-        if (!response.ok) {
-          console.error('Failed to fetch OpenAI models:', response.statusText);
-          return;
-        }
-        const data = await response.json();
-        if (data.models && Array.isArray(data.models)) {
-          data.models.forEach(model => {
-            // Primary model dropdown
-            const option = document.createElement('option');
-            option.value = model.NAME;
-            option.textContent = model.NAME;
-            option.setAttribute('data-source', 'openai');
-            modelSelect.appendChild(option);
-            
-            // Backup model dropdown
-            const backupOption = document.createElement('option');
-            backupOption.value = model.NAME;
-            backupOption.textContent = model.NAME;
-            backupOption.setAttribute('data-source', 'openai');
-            backupModelSelect.appendChild(backupOption);
-          });
-        } else {
-          console.error('Invalid OpenAI models data:', data);
-        }
-      } catch (error) {
-        console.error('Error fetching OpenAI models:', error);
-      }
-    }
-
-    // -----------------------------------------------------
-    // Set Preferred Model Based on Priority Order
-    // -----------------------------------------------------
-    function setPreferredModel() {
-      const preferredModels = [
-        "o3-mini-high",
-        "qwen2.5-coder:32b",
-        "qwen2.5-coder:14b",
-        "qwen2.5-coder:7b",
-        "qwen2.5-coder:1.5b",
-        "llama3.2:latest"
-      ];
-      
-      const options = modelSelect.options;
-      let primaryModelIndex = -1;
-      
-      // Set primary model
-      for (const modelName of preferredModels) {
-        for (let i = 0; i < options.length; i++) {
-          if (options[i].value === modelName) {
-            modelSelect.selectedIndex = i;
-            currentModel = modelName;
-            primaryModelIndex = preferredModels.indexOf(modelName);
-            break;
-          }
-        }
-        if (primaryModelIndex !== -1) break;
-      }
-      
-      // Always set backup model to the last model in the preferredModels list
-      const backupModelName = preferredModels[preferredModels.length - 1];
-      for (let i = 0; i < backupModelSelect.options.length; i++) {
-        if (backupModelSelect.options[i].value === backupModelName) {
-          backupModelSelect.selectedIndex = i;
-          currentBackupModel = backupModelName;
-          break;
-        }
-      }
-      
-      // If the last model in preferredModels isn't available, use the first available model
-      if (!currentBackupModel && backupModelSelect.options.length > 0) {
-        backupModelSelect.selectedIndex = 0;
-        currentBackupModel = backupModelSelect.options[0].value;
-      }
-    }
-
-    // -----------------------------------------------------
-    // HELPER FUNCTIONS FOR CHAT
-    // -----------------------------------------------------
-    function scrollChatToBottom() {
-      chatWindow.scrollTop = chatWindow.scrollHeight;
-    }
-    
-    function scrollChatToBottomIfNeeded() {
-      const tolerance = 50;
-      const isNearBottom = chatWindow.scrollHeight - chatWindow.scrollTop - chatWindow.clientHeight <= tolerance;
-      if (isNearBottom) {
-        chatWindow.scrollTop = chatWindow.scrollHeight;
-      }
-    }
-    
-    function escapeHTML(str) {
-      return str
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-    }
-    
-    function formatTextWithMarkup(text) {
-      if (!text) return '';
-      
-      let escaped = escapeHTML(text);
-      
-      // Handle bold text with **
-      escaped = escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-      
-      // Handle italic text with *
-      escaped = escaped.replace(/\*([^\*]+)\*/g, '<em>$1</em>');
-      
-      // Handle inline code with `
-      escaped = escaped.replace(/`([^`]+)`/g, '<code>$1</code>');
-      
-      // Handle links [text](url)
-      escaped = escaped.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-      
-      // Convert line breaks to <br>
-      escaped = escaped.replace(/\n/g, '<br>');
-      
-      return escaped;
-    }
-
-    function detectLanguage(code, declaredLang) {
-      if (declaredLang) {
-        // Check if we have an alias for this language
-        return languageAliases[declaredLang.toLowerCase()] || declaredLang.toLowerCase();
-      }
-      
-      // Simple language detection heuristics
-      const firstLine = code.split('\n')[0].trim();
-      
-      // Python 
-      if (code.includes('def ') && code.includes(':') || 
-          code.includes('import ') && !code.includes(';') || 
-          firstLine.startsWith('#!/usr/bin/env python')) {
-        return 'python';
-      }
-      
-      // JavaScript
-      if (code.includes('function ') || 
-          code.includes('=>') || 
-          code.includes('const ') || 
-          code.includes('let ') ||
-          firstLine.includes('use strict')) {
-        if (code.includes('<jsx') || code.includes('React')) {
-          return 'jsx';
-        }
-        return 'javascript';
-      }
-      
-      // HTML
-      if (code.includes('<html') || 
-          code.includes('<!DOCTYPE') || 
-          (code.includes('<div') && code.includes('</div>'))) {
-        return 'html';
-      }
-      
-      // CSS
-      if (code.includes('{') && code.includes('}') && 
-          (code.includes('margin:') || code.includes('padding:') || code.includes('color:'))) {
-        return 'css';
-      }
-      
-      // SQL
-      if (code.toLowerCase().includes('select ') && 
-          (code.toLowerCase().includes(' from ') || code.toLowerCase().includes(' where '))) {
-        return 'sql';
-      }
-      
-      // JSON
-      if ((code.trim().startsWith('{') && code.trim().endsWith('}')) || 
-          (code.trim().startsWith('[') && code.trim().endsWith(']'))) {
-        try {
-          JSON.parse(code);
-          return 'json';
-        } catch (e) {
-          // Not valid JSON
-        }
-      }
-      
-      // Bash/Shell
-      if (firstLine.startsWith('#!/bin/') || 
-          (code.includes('echo ') && code.includes('$'))) {
-        return 'bash';
-      }
-      
-      // If we can't detect, default to plaintext
-      return '';
-    }
-
-    function createMessageGroup(sender) {
-      const group = document.createElement('div');
-      group.classList.add('message-group', sender);
-      
-      const avatar = document.createElement('div');
-      avatar.classList.add(sender === 'user' ? 'user-avatar' : 'bot-avatar');
-      avatar.textContent = sender === 'user' ? 'U' : 'AI';
-      
-      const messages = document.createElement('div');
-      messages.classList.add('messages');
-      
-      group.appendChild(avatar);
-      group.appendChild(messages);
-      chatWindow.appendChild(group);
-      
-      return { group, messages };
-    }
-
-    function appendUserMessage(content, images = []) {
-      const { group, messages } = createMessageGroup('user');
-      
-      const msg = document.createElement('div');
-      msg.classList.add('chat-message', 'user');
-      msg.innerHTML = formatTextWithMarkup(content);
-      messages.appendChild(msg);
-      
-      // Add images if any
-      if (images && images.length > 0) {
-        const imagesDiv = document.createElement('div');
-        imagesDiv.classList.add('user-images');
-        
-        images.forEach(base64Data => {
-          const imgEl = document.createElement('img');
-          imgEl.src = base64Data;
-          imagesDiv.appendChild(imgEl);
-        });
-        
-        messages.appendChild(imagesDiv);
-      }
-      
-      scrollChatToBottom();
-      return group;
-    }
-
-    function createBotMessageGroup() {
-      const { group, messages } = createMessageGroup('bot');
-      currentBotMessageGroup = group;
-      return messages;
-    }
-
-    function appendTextToBotMessage(messages, text) {
-      const msg = document.createElement('div');
-      msg.classList.add('chat-message', 'bot');
-      msg.innerHTML = formatTextWithMarkup(text);
-      messages.appendChild(msg);
-      currentBotMessageContainer = msg;
-      currentPartialTextElement = null;
-      scrollChatToBottomIfNeeded();
-      return msg;
-    }
-
-    function updatePartialText(text) {
-      if (!currentBotMessageContainer) return;
-      
-      if (currentPartialTextElement) {
-        currentPartialTextElement.innerHTML = formatTextWithMarkup(text);
-      } else {
-        const el = document.createElement('span');
-        el.innerHTML = formatTextWithMarkup(text);
-        currentBotMessageContainer.appendChild(el);
-        currentPartialTextElement = el;
-      }
-      
-      scrollChatToBottomIfNeeded();
-    }
-
-    // -----------------------------------------------------
-    // THINKING BLOCK FUNCTIONS
-    // -----------------------------------------------------
-    function startThinkBlock(messages) {
-      const thinkContainer = document.createElement('div');
-      thinkContainer.classList.add('bot-think');
-      
-      const indicator = document.createElement('div');
-      indicator.classList.add('thinking-indicator');
-      indicator.textContent = 'AI is thinking...';
-      
-      const contentDiv = document.createElement('div');
-      contentDiv.classList.add('think-content');
-      contentDiv.style.display = 'none';
-      
-      indicator.addEventListener('click', () => {
-        if (contentDiv.style.display === 'none') {
-          contentDiv.style.display = 'block';
-          indicator.textContent = 'Hide thinking';
-        } else {
-          contentDiv.style.display = 'none';
-          indicator.textContent = 'AI is thinking...';
-        }
-      });
-      
-      thinkContainer.appendChild(indicator);
-      thinkContainer.appendChild(contentDiv);
-      messages.appendChild(thinkContainer);
-      
-      scrollChatToBottomIfNeeded();
-      
-      const block = { indicator, contentDiv };
-      thinkBlocks.push(block);
-      currentThinkBlock = block;
-      
-      return thinkContainer;
-    }
-
-    function appendThinkText(text) {
-      if (!currentThinkBlock) return;
-      
-      const content = escapeHTML(text);
-      currentThinkBlock.contentDiv.innerHTML += content;
-      scrollChatToBottomIfNeeded();
-    }
-
-    function endThinkBlock() {
-        currentThinkBlock = null;
-        inThinkBlock = false;
-        currentBotMessageContainer = null; // Reset to start a new message bubble
-    }
-
-    // -----------------------------------------------------
-    // CODE BLOCK FUNCTIONS (with Prism.js)
-    // -----------------------------------------------------
-    function startCodeBlock(messages, declaredLang = null) {
-      const codeBlockDiv = document.createElement('div');
-      codeBlockDiv.classList.add('code-block');
-      
-      const headerDiv = document.createElement('div');
-      headerDiv.classList.add('code-header');
-      
-      const langTag = document.createElement('span');
-      langTag.classList.add('code-lang-tag');
-      langTag.textContent = declaredLang || 'plaintext';
-      
-      const copyBtn = document.createElement('button');
-      copyBtn.classList.add('copy-button');
-      copyBtn.innerHTML = `
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-        </svg>
-        Copy
-      `;
-      
-      headerDiv.appendChild(langTag);
-      headerDiv.appendChild(copyBtn);
-      
-      const preEl = document.createElement('pre');
-      const codeEl = document.createElement('code');
-      
-      if (declaredLang) {
-        const normalizedLang = languageAliases[declaredLang.toLowerCase()] || declaredLang.toLowerCase();
-        codeEl.classList.add(`language-${normalizedLang}`);
-      }
-      
-      preEl.appendChild(codeEl);
-      codeBlockDiv.appendChild(headerDiv);
-      codeBlockDiv.appendChild(preEl);
-      
-      messages.appendChild(codeBlockDiv);
-      
-      currentCodeBlockContainer = codeBlockDiv;
-      currentCodeElement = codeEl;
-      codeLines = [];
-      codeLines.lang = declaredLang;
-      
-      copyBtn.addEventListener('click', () => {
-        const text = codeEl.textContent;
-        navigator.clipboard.writeText(text).then(() => {
-          copyBtn.innerHTML = `
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="20 6 9 17 4 12"></polyline>
-            </svg>
-            Copied!
-          `;
-          setTimeout(() => {
-            copyBtn.innerHTML = `
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-              </svg>
-              Copy
-            `;
-          }, 1500);
-        });
-      });
-      
-      scrollChatToBottomIfNeeded();
-      return codeBlockDiv;
-    }
-
-    function appendCodeLine(line) {
-      // Check for language declaration at the first line
-      if (codeLines.length === 0 && !codeLines.lang) {
-        const langMatch = line.match(/^([a-zA-Z0-9_+\-.]+)\s*$/);
-        if (langMatch) {
-          const lang = langMatch[1].toLowerCase();
-          const normalizedLang = languageAliases[lang] || lang;
-          
-          codeLines.lang = normalizedLang;
-          if (currentCodeElement && currentCodeBlockContainer) {
-            currentCodeElement.classList.add(`language-${normalizedLang}`);
-            
-            // Update language tag in header
-            const langTag = currentCodeBlockContainer.querySelector('.code-lang-tag');
-            if (langTag) {
-              langTag.textContent = normalizedLang;
-            }
-          }
-          return; // Skip this line as it's just the language declaration
-        }
-      }
-      
-      codeLines.push(line);
-      if (currentCodeElement) {
-        currentCodeElement.textContent += line + '\n';
-        scrollChatToBottomIfNeeded();
-      }
-    }
-
-    function endCodeBlock() {
-      if (!currentCodeElement) return;
-      
-      // Trim leading/trailing blank lines
-      while (codeLines.length && codeLines[0].trim() === '') {
-          codeLines.shift();
-      }
-      while (codeLines.length && codeLines[codeLines.length - 1].trim() === '') {
-          codeLines.pop();
-      }
-      
-      // Determine minimal indentation
-      let minIndent = Infinity;
-      for (const ln of codeLines) {
-          if (ln.trim() === '') continue;
-          const match = ln.match(/^(\s+)/);
-          if (match) {
-              const indentCount = match[1].length;
-              if (indentCount < minIndent) { minIndent = indentCount; }
-          } else {
-              minIndent = 0;
-              break;
-          }
-      }
-      if (!Number.isFinite(minIndent)) { minIndent = 0; }
-      
-      // Rebuild code with indentation removed
-      const cleaned = codeLines.map(ln => ln.slice(minIndent)).join('\n');
-      currentCodeElement.textContent = cleaned;
-      
-      // Detect language if not already set
-      if (!codeLines.lang || codeLines.lang === 'plaintext') {
-          const detectedLang = detectLanguage(cleaned, null);
-          if (detectedLang) {
-              currentCodeElement.className = `language-${detectedLang}`;
-              const langTag = currentCodeBlockContainer.querySelector('.code-lang-tag');
-              if (langTag) {
-                  langTag.textContent = detectedLang;
-              }
-          }
-      }
-      
-      // Apply syntax highlighting
-      Prism.highlightElement(currentCodeElement);
-      
-      inCodeBlock = false;
-      currentCodeElement = null;
-      codeLines = [];
-      currentCodeBlockContainer = null;
-      currentPartialTextElement = null;
-      currentBotMessageContainer = null; // Reset to start a new message bubble
-      
-      scrollChatToBottomIfNeeded();
+// Whenever the main model changes, auto-adjust the timeout if it's in the large-model list.
+function handleModelChange() {
+  const selectedModel = modelSelect.value.trim();
+  const largeModels = ["o1", "o1-pro", "o1-pro-high"];
+  
+  // If the selected model starts with or equals any item in largeModels, set threshold=999
+  if (largeModels.some(m => selectedModel === m || selectedModel.startsWith(m))) {
+    timeoutThresholdInput.value = "999";
+  } else {
+    timeoutThresholdInput.value = "30"; // Can comment this out if the user wants to preserve their timeout threshold
   }
+}
 
-    // -----------------------------------------------------
-    // PARSING STREAMED CHUNKS
-    // -----------------------------------------------------
-    function parseAndAppendChunk(messages, newText) {
-      if (inThinkBlock) {
-        const closeTag = "</think>";
-        const closeIdx = newText.indexOf(closeTag);
-        if (closeIdx === -1) {
-          appendThinkText(newText);
-          return;
-        } else {
-          const beforeClose = newText.slice(0, closeIdx);
-          appendThinkText(beforeClose);
-          endThinkBlock();
-          const remainder = newText.slice(closeIdx + closeTag.length);
-          if (remainder) {
-            parseAndAppendChunk(messages, remainder);
-          }
-          return;
-        }
-      }
+// Attach change listener to main model select
+modelSelect.addEventListener('change', handleModelChange);
 
-      let textToProcess = leftoverLine + newText;
-      leftoverLine = "";
-      const segments = textToProcess.split('\n');
-      
-      for (let i = 0; i < segments.length - 1; i++) {
-        processLine(messages, segments[i]);
-      }
-      
-      leftoverLine = segments[segments.length - 1];
+// -----------------------------------------------------
+// MODEL FETCH FUNCTIONS
+// -----------------------------------------------------
+async function fetchAndPopulateOllamaModels() {
+  try {
+    const response = await fetch('/ollama-models');
+    if (!response.ok) {
+      console.error('Failed to fetch Ollama models:', response.statusText);
+      return;
+    }
+    const data = await response.json();
+    if (data.models && Array.isArray(data.models)) {
+      data.models.forEach(model => {
+        // Primary model dropdown
+        const option = document.createElement('option');
+        option.value = model.NAME;
+        option.textContent = model.NAME;
+        option.setAttribute('data-source', 'ollama');
+        modelSelect.appendChild(option);
+        
+        // Backup model dropdown
+        const backupOption = document.createElement('option');
+        backupOption.value = model.NAME;
+        backupOption.textContent = model.NAME;
+        backupOption.setAttribute('data-source', 'ollama');
+        backupModelSelect.appendChild(backupOption);
+      });
+    } else {
+      console.error('Invalid Ollama models data:', data);
+    }
+  } catch (error) {
+    console.error('Error fetching Ollama models:', error);
+  }
+}
 
-      if (!inCodeBlock && leftoverLine) {
-        const trimmedLeft = leftoverLine.trim();
+async function fetchAndPopulateOpenaiModels() {
+  try {
+    const response = await fetch('/openai-models');
+    if (!response.ok) {
+      console.error('Failed to fetch OpenAI models:', response.statusText);
+      return;
+    }
+    const data = await response.json();
+    if (data.models && Array.isArray(data.models)) {
+      data.models.forEach(model => {
+        // Primary model dropdown
+        const option = document.createElement('option');
+        option.value = model.NAME;
+        option.textContent = model.NAME;
+        option.setAttribute('data-source', 'openai');
+        modelSelect.appendChild(option);
         
-        // Check if it's a fence start/end
-        let isFence = false;
-        for (const pattern of codeFencePatterns) {
-          if (pattern.test(trimmedLeft)) {
-            isFence = true;
-            break;
-          }
-        }
-        
-        // Check for thinking blocks
-        if (trimmedLeft === '<think>' || trimmedLeft === '</think>') {
-          isFence = true;
-        }
-        
-        if (isFence) {
-          updatePartialText("");
-        } else {
-          updatePartialText(leftoverLine);
-        }
+        // Backup model dropdown
+        const backupOption = document.createElement('option');
+        backupOption.value = model.NAME;
+        backupOption.textContent = model.NAME;
+        backupOption.setAttribute('data-source', 'openai');
+        backupModelSelect.appendChild(backupOption);
+      });
+    } else {
+      console.error('Invalid OpenAI models data:', data);
+    }
+  } catch (error) {
+    console.error('Error fetching OpenAI models:', error);
+  }
+}
+
+// -----------------------------------------------------
+// Set Preferred Model Based on Priority Order
+// -----------------------------------------------------
+function setPreferredModel() {
+  const preferredModels = [
+    "o3-mini-high",
+    "qwen2.5-coder:32b",
+    "qwen2.5-coder:14b",
+    "qwen2.5-coder:7b",
+    "qwen2.5-coder:1.5b",
+    "llama3.2:latest"
+  ];
+  
+  const options = modelSelect.options;
+  let primaryModelIndex = -1;
+  
+  // Set primary model
+  for (const modelName of preferredModels) {
+    for (let i = 0; i < options.length; i++) {
+      if (options[i].value === modelName) {
+        modelSelect.selectedIndex = i;
+        currentModel = modelName;
+        primaryModelIndex = preferredModels.indexOf(modelName);
+        break;
       }
     }
-
-    function processLine(messages, line) {
-      const trimmed = line.trim();
-      
-      // Check for code fence start/end
-      let isFence = false;
-      let declaredLang = null;
-      
-      for (const pattern of codeFencePatterns) {
-        const match = trimmed.match(pattern);
-        if (match) {
-          isFence = true;
-          if (match[1]) { // Captured language name
-            declaredLang = match[1];
-          }
-          break;
-        }
-      }
-      
-      if (isFence) {
-        if (!inCodeBlock) {
-          inCodeBlock = true;
-          startCodeBlock(messages, declaredLang);
-        } else {
-          endCodeBlock();
-        }
-        return;
-      }
-      
-      // <think> block
-      if (trimmed === '<think>') {
-        inThinkBlock = true;
-        startThinkBlock(messages);
-        return;
-      }
-      if (trimmed === '</think>') {
-        endThinkBlock();
-        return;
-      }
-
-      // If in code block, append lines
-      if (inCodeBlock) {
-        appendCodeLine(line);
-      } else {
-        // Normal text - if we have meaningful content
-        if (line.trim().length > 0) {
-          // If we have leftover partial text, complete it first
-          if (currentPartialTextElement) {
-            currentPartialTextElement.innerHTML = formatTextWithMarkup(leftoverLine);
-            currentPartialTextElement = null;
-          }
-          
-          // Create a new message bubble if we don't have one
-          if (!currentBotMessageContainer) {
-            currentBotMessageContainer = appendTextToBotMessage(messages, line);
-          } else {
-            // We're in the middle of a message - do we need a line break?
-            const formattedLine = formatTextWithMarkup(line);
-            currentBotMessageContainer.innerHTML += '<br>' + formattedLine;
-          }
-        }
-      }
+    if (primaryModelIndex !== -1) break;
+  }
+  
+  // Always set backup model to the last model in the preferredModels list
+  const backupModelName = preferredModels[preferredModels.length - 1];
+  for (let i = 0; i < backupModelSelect.options.length; i++) {
+    if (backupModelSelect.options[i].value === backupModelName) {
+      backupModelSelect.selectedIndex = i;
+      currentBackupModel = backupModelName;
+      break;
     }
+  }
+  
+  // If the last model in preferredModels isn't available, use the first available model
+  if (!currentBackupModel && backupModelSelect.options.length > 0) {
+    backupModelSelect.selectedIndex = 0;
+    currentBackupModel = backupModelSelect.options[0].value;
+  }
+}
+
+// -----------------------------------------------------
+// HELPER FUNCTIONS FOR CHAT
+// -----------------------------------------------------
+function scrollChatToBottom() {
+  chatWindow.scrollTop = chatWindow.scrollHeight;
+}
+
+function scrollChatToBottomIfNeeded() {
+  const tolerance = 50;
+  const isNearBottom = chatWindow.scrollHeight - chatWindow.scrollTop - chatWindow.clientHeight <= tolerance;
+  if (isNearBottom) {
+    chatWindow.scrollTop = chatWindow.scrollHeight;
+  }
+}
+
+function escapeHTML(str) {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+// Simplified formatTextWithMarkup function for better performance
+function formatTextWithMarkup(text) {
+  if (!text) return '';
+  
+  try {
+    // Configure marked for our needs
+    marked.setOptions({
+      gfm: true,            // GitHub Flavored Markdown
+      breaks: true,         // Convert line breaks to <br>
+      headerIds: false,     // Don't add IDs to headers
+      mangle: false,        // Don't mangle email addresses
+      smartypants: true,    // Use smart typographic punctuation
+    });
     
-    // -----------------------------------------------------
-    // MULTIMODAL: IMAGE PASTE & PREVIEW HANDLING
-    // -----------------------------------------------------
-    userInput.addEventListener('paste', (event) => {
-      const items = event.clipboardData.items;
-      for (const item of items) {
-        if (item.type.indexOf("image") !== -1) {
-          const file = item.getAsFile();
-          const reader = new FileReader();
-          reader.onload = function(e) {
-            const base64Data = e.target.result;
-            const imageObj = { id: nextImageId++, data: base64Data };
-            pastedImages.push(imageObj);
-            addImagePreview(imageObj.data, imageObj.id);
-          };
-          reader.readAsDataURL(file);
-        }
+    // Process the text with marked
+    const htmlText = marked.parse(escapeHTML(text));
+    
+    // Process LaTeX more efficiently
+    let processedHtml = htmlText;
+    
+    // Process display LaTeX
+    processedHtml = processedHtml.replace(/\$\$([\s\S]+?)\$\$/g, (match, latex) => {
+      try {
+        return katex.renderToString(latex, {
+          displayMode: true,
+          throwOnError: false
+        });
+      } catch (e) {
+        console.error('KaTeX display error:', e);
+        return match;
       }
     });
+    
+    // Process inline LaTeX
+    processedHtml = processedHtml.replace(/\$([^\$\n]+?)\$/g, (match, latex) => {
+      try {
+        return katex.renderToString(latex, {
+          displayMode: false,
+          throwOnError: false
+        });
+      } catch (e) {
+        console.error('KaTeX inline error:', e);
+        return match;
+      }
+    });
+    
+    return processedHtml;
+  } catch (e) {
+    console.error('Error in formatTextWithMarkup:', e);
+    // Fallback to basic formatting if anything goes wrong
+    return escapeHTML(text).replace(/\n/g, '<br>');
+  }
+}
 
-    function addImagePreview(base64Data, imageId) {
-      const previewDiv = document.createElement('div');
-      previewDiv.classList.add('image-preview');
-      previewDiv.dataset.imageId = imageId;
+// Function to identify if a line is likely code
+function isLikelyCode(line) {
+  const trimmed = line.trim();
+  
+  // Skip empty lines
+  if (!trimmed) return false;
+  
+  // Check against language-specific patterns
+  for (const lang in codeSignatures) {
+    for (const pattern of codeSignatures[lang]) {
+      if (pattern.test(trimmed)) {
+        return true;
+      }
+    }
+  }
+  
+  // Additional general code patterns
+  const generalCodePatterns = [
+    /[{}\[\]()<>].*[{}\[\]()<>]/,  // Multiple brackets/braces
+    /[a-zA-Z0-9_]+\s*\([^)]*\)/,   // Function calls
+    /\s{4,}[a-zA-Z0-9_]+/,         // Significant indentation (4+ spaces)
+    /^\s*[a-zA-Z0-9_]+:/,          // YAML keys
+    /^\s*"\w+":\s/,                // JSON keys
+    /^\s*[a-zA-Z0-9_\-\.]+\s*=/    // Variable assignments
+  ];
+  
+  for (const pattern of generalCodePatterns) {
+    if (pattern.test(trimmed)) {
+      return true;
+    }
+  }
+  
+  return false;
+}
 
+// Function to determine if a block of text is likely code
+function isCodeBlock(text) {
+  if (!text || text.length === 0) return false;
+  
+  const lines = text.split('\n');
+  // Need at least 2 non-empty lines to consider as a code block
+  const nonEmptyLines = lines.filter(line => line.trim().length > 0);
+  if (nonEmptyLines.length < 2) return false;
+  
+  // Count lines that appear to be code
+  let codeLineCount = 0;
+  for (const line of nonEmptyLines) {
+    if (isLikelyCode(line)) {
+      codeLineCount++;
+    }
+  }
+  
+  // If more than 40% of non-empty lines look like code, consider it a code block
+  return (codeLineCount / nonEmptyLines.length) > 0.4;
+}
+
+// Improved language detection from content
+function detectLanguageFromContent(content) {
+  if (!content) return '';
+  
+  // Count matches for each language
+  const scores = {};
+  for (const lang in codeSignatures) {
+    scores[lang] = 0;
+    for (const pattern of codeSignatures[lang]) {
+      const lines = content.split('\n');
+      for (const line of lines) {
+        if (pattern.test(line.trim())) {
+          scores[lang]++;
+        }
+      }
+    }
+  }
+  
+  // Find the language with the highest score
+  let bestLang = '';
+  let highestScore = 0;
+  for (const lang in scores) {
+    if (scores[lang] > highestScore) {
+      highestScore = scores[lang];
+      bestLang = lang;
+    }
+  }
+  
+  // Only return a language if we have reasonable confidence
+  return highestScore >= 2 ? bestLang : '';
+}
+
+function detectLanguage(code, declaredLang) {
+  if (declaredLang) {
+    // Check if we have an alias for this language
+    return languageAliases[declaredLang.toLowerCase()] || declaredLang.toLowerCase();
+  }
+  
+  return detectLanguageFromContent(code) || '';
+}
+
+function createMessageGroup(sender) {
+  const group = document.createElement('div');
+  group.classList.add('message-group', sender);
+  
+  const avatar = document.createElement('div');
+  avatar.classList.add(sender === 'user' ? 'user-avatar' : 'bot-avatar');
+  avatar.textContent = sender === 'user' ? 'U' : 'AI';
+  
+  const messages = document.createElement('div');
+  messages.classList.add('messages');
+  
+  group.appendChild(avatar);
+  group.appendChild(messages);
+  chatWindow.appendChild(group);
+  
+  return { group, messages };
+}
+
+function appendUserMessage(content, images = []) {
+  const { group, messages } = createMessageGroup('user');
+  
+  const msg = document.createElement('div');
+  msg.classList.add('chat-message', 'user');
+  msg.innerHTML = formatTextWithMarkup(content);
+  messages.appendChild(msg);
+  
+  // Add images if any
+  if (images && images.length > 0) {
+    const imagesDiv = document.createElement('div');
+    imagesDiv.classList.add('user-images');
+    
+    images.forEach(base64Data => {
       const imgEl = document.createElement('img');
       imgEl.src = base64Data;
+      imagesDiv.appendChild(imgEl);
+    });
+    
+    messages.appendChild(imagesDiv);
+  }
+  
+  scrollChatToBottom();
+  return group;
+}
 
-      const removeBtn = document.createElement('button');
-      removeBtn.classList.add('remove-image');
-      removeBtn.innerHTML = '×';
-      removeBtn.addEventListener('click', () => {
-        removeImagePreview(imageId, previewDiv);
-      });
+function createBotMessageGroup() {
+  const { group, messages } = createMessageGroup('bot');
+  currentBotMessageGroup = group;
+  return messages;
+}
 
-      previewDiv.appendChild(imgEl);
-      previewDiv.appendChild(removeBtn);
-      imagePreviewContainer.appendChild(previewDiv);
+function appendTextToBotMessage(messages, text) {
+  // Skip empty text
+  if (!text || text.trim() === '') return currentBotMessageContainer;
+  
+  // If we already have a container, add to it instead of creating a new one
+  if (currentBotMessageContainer) {
+    currentBotMessageContainer.innerHTML += (currentBotMessageContainer.innerHTML ? '<br>' : '') + formatTextWithMarkup(text);
+    return currentBotMessageContainer;
+  }
+  
+  // Otherwise create a new message bubble
+  const msg = document.createElement('div');
+  msg.classList.add('chat-message', 'bot');
+  msg.innerHTML = formatTextWithMarkup(text);
+  messages.appendChild(msg);
+  
+  currentBotMessageContainer = msg;
+  currentPartialTextElement = null;
+  scrollChatToBottomIfNeeded();
+  return msg;
+}
+
+function updatePartialText(text) {
+  if (!currentBotMessageContainer) return;
+  
+  if (currentPartialTextElement) {
+    currentPartialTextElement.innerHTML = formatTextWithMarkup(text);
+  } else {
+    const el = document.createElement('span');
+    el.innerHTML = formatTextWithMarkup(text);
+    currentBotMessageContainer.appendChild(el);
+    currentPartialTextElement = el;
+  }
+  
+  scrollChatToBottomIfNeeded();
+}
+
+// -----------------------------------------------------
+// THINKING BLOCK FUNCTIONS
+// -----------------------------------------------------
+function startThinkBlock(messages) {
+  const thinkContainer = document.createElement('div');
+  thinkContainer.classList.add('bot-think');
+  
+  const indicator = document.createElement('div');
+  indicator.classList.add('thinking-indicator');
+  indicator.textContent = 'AI is thinking...';
+  
+  const contentDiv = document.createElement('div');
+  contentDiv.classList.add('think-content');
+  contentDiv.style.display = 'none';
+  
+  indicator.addEventListener('click', () => {
+    if (contentDiv.style.display === 'none') {
+      contentDiv.style.display = 'block';
+      indicator.textContent = 'Hide thinking';
+    } else {
+      contentDiv.style.display = 'none';
+      indicator.textContent = 'AI is thinking...';
     }
+  });
+  
+  thinkContainer.appendChild(indicator);
+  thinkContainer.appendChild(contentDiv);
+  messages.appendChild(thinkContainer);
+  
+  scrollChatToBottomIfNeeded();
+  
+  const block = { indicator, contentDiv };
+  thinkBlocks.push(block);
+  currentThinkBlock = block;
+  
+  return thinkContainer;
+}
 
-    function removeImagePreview(imageId, previewDiv) {
-      pastedImages = pastedImages.filter(img => img.id !== parseInt(imageId));
-      previewDiv.remove();
+function appendThinkText(text) {
+  if (!currentThinkBlock) return;
+  
+  const content = escapeHTML(text);
+  currentThinkBlock.contentDiv.innerHTML += content;
+  scrollChatToBottomIfNeeded();
+}
+
+function endThinkBlock() {
+  currentThinkBlock = null;
+  inThinkBlock = false;
+  currentBotMessageContainer = null; // Reset to start a new message bubble
+}
+
+// -----------------------------------------------------
+// CODE BLOCK FUNCTIONS (with Prism.js)
+// -----------------------------------------------------
+function startCodeBlock(messages, declaredLang = null) {
+  const codeBlockDiv = document.createElement('div');
+  codeBlockDiv.classList.add('code-block');
+  
+  const headerDiv = document.createElement('div');
+  headerDiv.classList.add('code-header');
+  
+  const langTag = document.createElement('span');
+  langTag.classList.add('code-lang-tag');
+  langTag.textContent = declaredLang || 'plaintext';
+  
+  const copyBtn = document.createElement('button');
+  copyBtn.classList.add('copy-button');
+  copyBtn.innerHTML = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+    </svg>
+    Copy
+  `;
+  
+  headerDiv.appendChild(langTag);
+  headerDiv.appendChild(copyBtn);
+  
+  const preEl = document.createElement('pre');
+  const codeEl = document.createElement('code');
+  
+  if (declaredLang) {
+    const normalizedLang = languageAliases[declaredLang.toLowerCase()] || declaredLang.toLowerCase();
+    codeEl.classList.add(`language-${normalizedLang}`);
+  }
+  
+  preEl.appendChild(codeEl);
+  codeBlockDiv.appendChild(headerDiv);
+  codeBlockDiv.appendChild(preEl);
+  
+  messages.appendChild(codeBlockDiv);
+  
+  currentCodeBlockContainer = codeBlockDiv;
+  currentCodeElement = codeEl;
+  codeLines = [];
+  codeLines.lang = declaredLang;
+  
+  copyBtn.addEventListener('click', () => {
+    const text = codeEl.textContent;
+    navigator.clipboard.writeText(text).then(() => {
+      copyBtn.innerHTML = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        Copied!
+      `;
+      setTimeout(() => {
+        copyBtn.innerHTML = `
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+          </svg>
+          Copy
+        `;
+      }, 1500);
+    });
+  });
+  
+  scrollChatToBottomIfNeeded();
+  return codeBlockDiv;
+}
+
+function appendCodeLine(line) {
+  // Check for language declaration at the first line
+  if (codeLines.length === 0 && !codeLines.lang) {
+    const langMatch = line.match(/^([a-zA-Z0-9_+\-.]+)\s*$/);
+    if (langMatch) {
+      const lang = langMatch[1].toLowerCase();
+      const normalizedLang = languageAliases[lang] || lang;
+      
+      codeLines.lang = normalizedLang;
+      if (currentCodeElement && currentCodeBlockContainer) {
+        currentCodeElement.classList.add(`language-${normalizedLang}`);
+        
+        // Update language tag in header
+        const langTag = currentCodeBlockContainer.querySelector('.code-lang-tag');
+        if (langTag) {
+          langTag.textContent = normalizedLang;
+        }
+      }
+      return; // Skip this line as it's just the language declaration
     }
+  }
+  
+  codeLines.push(line);
+  if (currentCodeElement) {
+    currentCodeElement.textContent += line + '\n';
+    scrollChatToBottomIfNeeded();
+  }
+}
 
-    // -----------------------------------------------------
-    // EXPORT & IMPORT CONVERSATIONS
-    // -----------------------------------------------------
-    function exportConversation() {
-      const exportObj = {
-        model: currentModel || "",
-        backup_models: currentBackupModel || "",
-        messages: conversation
-      };
-      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportObj, null, 2));
-      const downloadAnchorNode = document.createElement('a');
-      downloadAnchorNode.setAttribute("href", dataStr);
-      downloadAnchorNode.setAttribute("download", "conversation.json");
-      document.body.appendChild(downloadAnchorNode);
-      downloadAnchorNode.click();
-      downloadAnchorNode.remove();
+function endCodeBlock() {
+  if (!currentCodeElement) return;
+  
+  // Trim leading/trailing blank lines
+  while (codeLines.length && codeLines[0].trim() === '') {
+      codeLines.shift();
+  }
+  while (codeLines.length && codeLines[codeLines.length - 1].trim() === '') {
+      codeLines.pop();
+  }
+  
+  // Determine minimal indentation
+  let minIndent = Infinity;
+  for (const ln of codeLines) {
+      if (ln.trim() === '') continue;
+      const match = ln.match(/^(\s+)/);
+      if (match) {
+          const indentCount = match[1].length;
+          if (indentCount < minIndent) { minIndent = indentCount; }
+      } else {
+          minIndent = 0;
+          break;
+      }
+  }
+  if (!Number.isFinite(minIndent)) { minIndent = 0; }
+  
+  // Rebuild code with indentation removed
+  const cleaned = codeLines.map(ln => ln.slice(minIndent)).join('\n');
+  currentCodeElement.textContent = cleaned;
+  
+  // Detect language if not already set
+  if (!codeLines.lang || codeLines.lang === 'plaintext') {
+      const detectedLang = detectLanguage(cleaned, null);
+      if (detectedLang) {
+          currentCodeElement.className = `language-${detectedLang}`;
+          const langTag = currentCodeBlockContainer.querySelector('.code-lang-tag');
+          if (langTag) {
+              langTag.textContent = detectedLang;
+          }
+      }
+  }
+  
+  // Apply syntax highlighting
+  try {
+    Prism.highlightElement(currentCodeElement);
+  } catch (e) {
+    console.error('Error highlighting code:', e);
+  }
+  
+  inCodeBlock = false;
+  currentCodeElement = null;
+  codeLines = [];
+  currentCodeBlockContainer = null;
+  currentPartialTextElement = null;
+  currentBotMessageContainer = null; // Reset to start a new message bubble
+  
+  scrollChatToBottomIfNeeded();
+}
+
+// -----------------------------------------------------
+// PARSING STREAMED CHUNKS
+// -----------------------------------------------------
+function parseAndAppendChunk(messages, newText) {
+  if (inThinkBlock) {
+    const closeTag = "</think>";
+    const closeIdx = newText.indexOf(closeTag);
+    if (closeIdx === -1) {
+      appendThinkText(newText);
+      return;
+    } else {
+      const beforeClose = newText.slice(0, closeIdx);
+      appendThinkText(beforeClose);
+      endThinkBlock();
+      pendingLines = []; // Reset pending lines after think block ends
+      const remainder = newText.slice(closeIdx + closeTag.length);
+      if (remainder) {
+        parseAndAppendChunk(messages, remainder);
+      }
+      return;
+    }
+  }
+
+  let textToProcess = leftoverLine + newText;
+  leftoverLine = "";
+  const segments = textToProcess.split('\n');
+  
+  for (let i = 0; i < segments.length - 1; i++) {
+    processLine(messages, segments[i]);
+  }
+  
+  leftoverLine = segments[segments.length - 1];
+
+  if (!inCodeBlock && leftoverLine) {
+    const trimmedLeft = leftoverLine.trim();
+    
+    // Check if it's a fence start/end
+    let isFence = false;
+    for (const pattern of codeFencePatterns) {
+      if (pattern.test(trimmedLeft)) {
+        isFence = true;
+        break;
+      }
     }
     
-    exportChatButton.addEventListener('click', exportConversation);
-
-    function updateExportButtonVisibility() {
-      exportChatButton.style.display = conversation.length > 0 ? 'inline-flex' : 'none';
+    // Check for thinking blocks
+    if (trimmedLeft === '<think>' || trimmedLeft === '</think>') {
+      isFence = true;
     }
+    
+    // Check for file header patterns
+    if (fileHeaderPattern.test(trimmedLeft) || fileEndPattern.test(trimmedLeft)) {
+      isFence = true;
+    }
+    
+    if (isFence) {
+      updatePartialText("");
+    } else {
+      updatePartialText(leftoverLine);
+    }
+  }
+}
 
-    importFileInput.addEventListener('change', handleImportFile);
-
-    function handleImportFile(event) {
-      const file = event.target.files[0];
-      if (!file) return;
+// Updated processLine function with improved horizontal separator handling
+function processLine(messages, line) {
+  const trimmed = line.trim();
+  
+  // Special case: Handle "####" markdown heading or similar that might be mistaken for code fence
+  if (/^#{2,6}\s+.+/.test(trimmed)) {
+    // This is a markdown heading, not a code fence
+    if (currentPartialTextElement) {
+      currentPartialTextElement.innerHTML = formatTextWithMarkup(leftoverLine);
+      currentPartialTextElement = null;
+    } 
+    
+    if (currentBotMessageContainer) {
+      currentBotMessageContainer.innerHTML += '<br>' + formatTextWithMarkup(line);
+    } else {
+      appendTextToBotMessage(messages, line);
+    }
+    return;
+  }
+  
+  // Special case: Handle horizontal separator lines (3 or more dashes, equals, etc.)
+  // Create a real <hr> element instead of adding text
+  if (/^(-{3,}|={3,}|_{3,})$/.test(trimmed) && 
+      !inCodeBlock && 
+      pendingLines.length === 0) {
+    
+    // First complete any partial text
+    if (currentPartialTextElement) {
+      currentPartialTextElement.innerHTML = formatTextWithMarkup(leftoverLine);
+      currentPartialTextElement = null;
+    }
+    
+    // Create an actual HR element
+    const hr = document.createElement('hr');
+    hr.className = 'message-separator';
+    messages.appendChild(hr);
+    
+    // Reset message container so next text creates a new bubble
+    currentBotMessageContainer = null;
+    return;
+  }
+  
+  // Check for file header pattern first
+  const fileHeaderMatch = trimmed.match(fileHeaderPattern);
+  if (fileHeaderMatch) {
+    // If we're already in a code block, end it first
+    if (inCodeBlock) {
+      endCodeBlock();
+    }
+    
+    // Start a new code block with the file name as language hint
+    inCodeBlock = true;
+    const fileName = fileHeaderMatch[1].trim();
+    const extension = fileName.split('.').pop();
+    
+    // Try to determine language from file extension
+    let language = '';
+    if (extension) {
+      language = languageAliases[extension.toLowerCase()] || extension.toLowerCase();
+    }
+    
+    // Create a code block with file name in header
+    const codeBlock = startCodeBlock(messages, language);
+    
+    // Update the language tag to show filename instead
+    const langTag = codeBlock.querySelector('.code-lang-tag');
+    if (langTag) {
+      langTag.textContent = fileName;
+    }
+    
+    pendingLines = []; // Clear pending lines
+    return;
+  }
+  
+  // Check for file end pattern
+  if (fileEndPattern.test(trimmed)) {
+    if (inCodeBlock) {
+      endCodeBlock();
+    }
+    pendingLines = []; // Clear pending lines
+    return;
+  }
+  
+  // Check for code fence start/end
+  let isFence = false;
+  let declaredLang = null;
+  
+  for (const pattern of codeFencePatterns) {
+    const match = trimmed.match(pattern);
+    if (match) {
+      // Skip isolated "---" that is likely just a separator, not a code fence
+      if (/^-{3,}$/.test(trimmed) && pendingLines.length === 0 && !isCodeBlock("\n" + line + "\n")) {
+        // This is probably just a text separator, not a code fence
+        if (currentPartialTextElement) {
+          currentPartialTextElement.innerHTML = formatTextWithMarkup(leftoverLine);
+          currentPartialTextElement = null;
+        } 
+        
+        // Create an actual HR element
+        const hr = document.createElement('hr');
+        hr.className = 'message-separator';
+        messages.appendChild(hr);
+        
+        // Reset message container
+        currentBotMessageContainer = null;
+        return;
+      }
       
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        try {
-          const importedData = JSON.parse(e.target.result);
-          
-          if (activeAbortControllers.length > 0) {
-            activeAbortControllers.forEach(controller => controller.abort());
-            activeAbortControllers = [];
-          }
-          
-          if (typeof importedData !== "object" || !Array.isArray(importedData.messages)) {
-            throw new Error("Imported JSON must have a 'messages' array.");
-          }
-          
-          // Validate messages
-          for (let i = 0; i < importedData.messages.length; i++) {
-            const msg = importedData.messages[i];
-            if (typeof msg !== "object" || !("role" in msg) || !("content" in msg)) {
-              throw new Error(`Invalid message at index ${i}: Missing role or content.`);
-            }
-            if (!["user","assistant"].includes(msg.role)) {
-              throw new Error(`Invalid role at index ${i}: ${msg.role}`);
-            }
-            if (typeof msg.content !== "string") {
-              throw new Error(`Invalid content at index ${i}. Must be string.`);
-            }
-            if ("images" in msg) {
-              if (!Array.isArray(msg.images) || !msg.images.every(item => typeof item === 'string')) {
-                throw new Error(`Invalid images array at index ${i}.`);
-              }
-            }
-          }
-          
-          if (typeof importedData.model === "string") {
-            setModelIfExists(importedData.model);
-          }
-          
-          conversation = importedData.messages;
-          renderConversationFromArray();
-          
-        } catch (ex) {
-          alert("Failed to import conversation: " + ex.message);
-          console.error(ex);
-        }
-      };
-      reader.readAsText(file);
+      isFence = true;
+      if (match[1]) { // Captured language name
+        declaredLang = match[1];
+      }
+      break;
     }
-
-    function setModelIfExists(modelName) {
-      const opts = modelSelect.options;
-      for (let i = 0; i < opts.length; i++) {
-        if (opts[i].value === modelName) {
-          modelSelect.selectedIndex = i;
-          currentModel = modelName;
+  }
+  
+  // Handle code fences
+  if (isFence) {
+    if (!inCodeBlock) {
+      // Look ahead to see if the next few lines appear to be code
+      if (pendingLines.length > 0) {
+        const potentialCode = pendingLines.join('\n');
+        if (!isCodeBlock(potentialCode) && !/^-{3,}$/.test(trimmed)) {
+          // Not likely code and not triple dashes, just render as normal text
+          if (currentPartialTextElement) {
+            currentPartialTextElement.innerHTML = formatTextWithMarkup(line);
+            currentPartialTextElement = null;
+          } else if (currentBotMessageContainer) {
+            currentBotMessageContainer.innerHTML += '<br>' + formatTextWithMarkup(line);
+          } else {
+            appendTextToBotMessage(messages, line);
+          }
           return;
         }
       }
-      // If not found, leave the current selection unchanged
+      
+      inCodeBlock = true;
+      startCodeBlock(messages, declaredLang);
+    } else {
+      endCodeBlock();
     }
+    pendingLines = []; // Clear pending lines
+    return;
+  }
+  
+  // <think> block handling
+  if (trimmed === '<think>') {
+    inThinkBlock = true;
+    startThinkBlock(messages);
+    pendingLines = []; // Clear pending lines
+    return;
+  }
+  if (trimmed === '</think>') {
+    endThinkBlock();
+    pendingLines = []; // Clear pending lines
+    return;
+  }
 
-    function renderConversationFromArray() {
-      chatWindow.innerHTML = '';
-      resetState();
+  // If in code block, append lines
+  if (inCodeBlock) {
+    appendCodeLine(line);
+    return;
+  }
+  
+  // Not in a code block - collect context to determine if we should start one
+  
+  // Check for common code patterns
+  const isCodeLine = isLikelyCode(line);
+  
+  // Keep track of potential code lines
+  if (isCodeLine || (pendingLines.length > 0 && line.trim() === '')) {
+    pendingLines.push(line);
+    
+    // If we've accumulated several lines, check if they form a code block
+    if (pendingLines.length >= 3) {
+      const pendingText = pendingLines.join('\n');
+      if (isCodeBlock(pendingText)) {
+        // This is likely code - start a code block
+        inCodeBlock = true;
+        const detectedLang = detectLanguageFromContent(pendingText);
+        startCodeBlock(messages, detectedLang);
+        
+        // Add all pending lines to the code block
+        for (const pendingLine of pendingLines) {
+          appendCodeLine(pendingLine);
+        }
+        
+        pendingLines = [];
+        return;
+      }
+    }
+    
+    // If lines don't yet form a clear code block or we're still collecting lines,
+    // render the current line as normal text
+    // If we have leftover partial text, complete it first
+    if (currentPartialTextElement) {
+      currentPartialTextElement.innerHTML = formatTextWithMarkup(leftoverLine);
+      currentPartialTextElement = null;
+    }
+    
+    // Create a new message bubble if we don't have one
+    if (!currentBotMessageContainer) {
+      currentBotMessageContainer = appendTextToBotMessage(messages, line);
+    } else {
+      // We're in the middle of a message - add the line with a line break
+      if (line.trim().length > 0) {
+        currentBotMessageContainer.innerHTML += '<br>' + formatTextWithMarkup(line);
+      } else if (line === '') {
+        // Add paragraph break for empty lines
+        currentBotMessageContainer.innerHTML += '<br><br>';
+      }
+    }
+    return;
+  }
+  
+  // If we reach here, this isn't a code line and we should process any pending lines as normal text
+  if (pendingLines.length > 0) {
+    // Process each pending line as regular text (already done if we reached here)
+    pendingLines = [];
+  }
+  
+  // Normal text - if we have meaningful content
+  if (line.trim().length > 0) {
+    // If we have leftover partial text, complete it first
+    if (currentPartialTextElement) {
+      currentPartialTextElement.innerHTML = formatTextWithMarkup(leftoverLine);
+      currentPartialTextElement = null;
+    }
+    
+    // Create a new message bubble if we don't have one
+    if (!currentBotMessageContainer) {
+      currentBotMessageContainer = appendTextToBotMessage(messages, line);
+    } else {
+      // We're in the middle of a message - add a line break
+      currentBotMessageContainer.innerHTML += '<br>' + formatTextWithMarkup(line);
+    }
+  } else if (line === '') {
+    // Add paragraph break for empty lines if we have a container
+    if (currentBotMessageContainer) {
+      currentBotMessageContainer.innerHTML += '<br><br>';
+    }
+  }
+}
+
+// Fixed renderConversationFromArray function to properly handle <hr> tags
+function renderConversationFromArray() {
+  chatWindow.innerHTML = '';
+  resetState();
+  
+  // Simple approach to avoid performance issues
+  conversation.forEach(msg => {
+    if (msg.role === 'user') {
+      // Create user message
+      appendUserMessage(msg.content, msg.images);
+    } else if (msg.role === 'assistant') {
+      // Create bot message container
+      const messages = createBotMessageGroup();
       
-      // Group consecutive messages by the same role
-      let currentRole = null;
-      let messageContainer = null;
+      // Process the content for literal <hr> tags before anything else
+      let content = msg.content;
       
-      conversation.forEach(msg => {
-        if (msg.role === 'user') {
-          // Create user message
-          appendUserMessage(msg.content, msg.images);
-          currentRole = 'user';
-        } else if (msg.role === 'assistant') {
-          // Create bot message container
-          const messages = createBotMessageGroup();
-          currentRole = 'assistant';
+      // Replace literal <hr class="message-separator"> with a placeholder
+      content = content.replace(/<hr class="message-separator">/g, '###HR_PLACEHOLDER###');
+      
+      // First pass: extract code blocks with ```
+      let codeBlockRegex = /```(?:[a-zA-Z0-9_+\-.]+)?\n([\s\S]*?)```/g;
+      let parts = [];
+      let lastIndex = 0;
+      let match;
+      
+      while ((match = codeBlockRegex.exec(content)) !== null) {
+        // Add text before code block
+        if (match.index > lastIndex) {
+          parts.push({
+            type: 'text',
+            content: content.substring(lastIndex, match.index)
+          });
+        }
+        
+        // Add code block
+        parts.push({
+          type: 'code',
+          language: match[0].match(/```([a-zA-Z0-9_+\-.]+)?/)?.[1] || '',
+          content: match[1]
+        });
+        
+        lastIndex = match.index + match[0].length;
+      }
+      
+      // Add remaining text
+      if (lastIndex < content.length) {
+        parts.push({
+          type: 'text',
+          content: content.substring(lastIndex)
+        });
+      }
+      
+      // If no code blocks were found, treat entire content as text
+      if (parts.length === 0) {
+        parts.push({
+          type: 'text',
+          content: content
+        });
+      }
+      
+      // Render each part
+      parts.forEach(part => {
+        if (part.type === 'code') {
+          // Render code block
+          const codeBlock = startCodeBlock(messages, part.language);
+          const codeEl = codeBlock.querySelector('code');
+          codeEl.textContent = part.content;
           
-          // Process the bot message
+          // Apply syntax highlighting
+          try {
+            Prism.highlightElement(codeEl);
+          } catch (e) {
+            console.error('Error highlighting code:', e);
+          }
+          
           inCodeBlock = false;
-          inThinkBlock = false;
+          currentCodeElement = null;
+          codeLines = [];
+          currentCodeBlockContainer = null;
+        } else {
+          // Render text, properly handling horizontal separator patterns
+          let text = part.content
+            .replace(/\n{2,}-{3,}\n{2,}/g, '\n\n###HR_PLACEHOLDER###\n\n')  // Replace standalone --- with placeholder
+            .replace(/\n{2,}={3,}\n{2,}/g, '\n\n###HR_PLACEHOLDER###\n\n')  // Replace standalone === with placeholder
+            .replace(/\n{2,}_{3,}\n{2,}/g, '\n\n###HR_PLACEHOLDER###\n\n'); // Replace standalone ___ with placeholder
           
-          const lines = msg.content.split('\n');
-          let currentText = '';
+          // Split by HR placeholders to create separate message bubbles with HRs between them
+          const segments = text.split('###HR_PLACEHOLDER###');
           
-          for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-            const trimmed = line.trim();
-            
-            // Check for code fence
-            let isFence = false;
-            let declaredLang = null;
-            
-            for (const pattern of codeFencePatterns) {
-              const match = trimmed.match(pattern);
-              if (match) {
-                isFence = true;
-                if (match[1]) { // Captured language name
-                  declaredLang = match[1];
-                }
-                break;
-              }
+          segments.forEach((segment, index) => {
+            if (segment.trim()) {
+              const msg = document.createElement('div');
+              msg.classList.add('chat-message', 'bot');
+              msg.innerHTML = formatTextWithMarkup(segment);
+              messages.appendChild(msg);
             }
             
-            // Handle think blocks
-            if (trimmed === '<think>') {
-              // If we have accumulated text, output it first
-              if (currentText) {
-                appendTextToBotMessage(messages, currentText);
-                currentText = '';
-              }
-              
-              // Start think block
-              inThinkBlock = true;
-              const thinkBlock = startThinkBlock(messages);
-              
-              // Collect thinking content until </think>
-              let thinkContent = '';
-              i++;
-              while (i < lines.length && lines[i].trim() !== '</think>') {
-                thinkContent += lines[i] + '\n';
-                i++;
-              }
-              
-              // Add to think block
-              thinkBlock.querySelector('.think-content').textContent = thinkContent;
-              continue;
+            // Add an HR after each segment except the last one
+            if (index < segments.length - 1) {
+              const hr = document.createElement('hr');
+              hr.className = 'message-separator';
+              messages.appendChild(hr);
             }
-            
-            // Handle code blocks
-            if (isFence) {
-              // If we have accumulated text, output it first
-              if (currentText) {
-                appendTextToBotMessage(messages, currentText);
-                currentText = '';
-              }
-              
-              if (!inCodeBlock) {
-                // Start a code block
-                inCodeBlock = true;
-                const codeBlock = startCodeBlock(messages, declaredLang);
-                
-                // Collect code until closing fence
-                let codeContent = '';
-                i++;
-                let foundClosingFence = false;
-                
-                while (i < lines.length) {
-                  const codeLine = lines[i];
-                  let isClosingFence = false;
-                  
-                  // Check if this line is a closing fence
-                  for (const pattern of codeFencePatterns) {
-                    if (pattern.test(codeLine.trim())) {
-                      isClosingFence = true;
-                      break;
-                    }
-                  }
-                  
-                  if (isClosingFence) {
-                    foundClosingFence = true;
-                    break;
-                  }
-                  
-                  codeContent += codeLine + '\n';
-                  i++;
-                }
-                
-                // Add the code and apply highlighting
-                const codeEl = codeBlock.querySelector('code');
-                codeEl.textContent = codeContent;
-                
-                // Detect language if not specified
-                if (!declaredLang) {
-                  const detectedLang = detectLanguage(codeContent);
-                  if (detectedLang) {
-                    codeEl.className = `language-${detectedLang}`;
-                    const langTag = codeBlock.querySelector('.code-lang-tag');
-                    if (langTag) {
-                      langTag.textContent = detectedLang;
-                    }
-                  }
-                }
-                
-                // Apply syntax highlighting
-                Prism.highlightElement(codeEl);
-                
-                // Reset state
-                inCodeBlock = false;
-              }
-            } else {
-              // Regular text line
-              currentText += line + '\n';
-            }
-          }
-          
-          // Output any remaining text
-          if (currentText) {
-            appendTextToBotMessage(messages, currentText);
-          }
+          });
         }
       });
+    }
+  });
+  
+  scrollChatToBottom();
+  updateExportButtonVisibility();
+  currentModel = modelSelect.value;
+}
+
+// Helper function to render LaTeX in message content
+function renderMathInMessageContent(element) {
+  if (!element) return;
+  
+  try {
+    renderMathInElement(element, {
+      delimiters: [
+        {left: '$$', right: '$$', display: true},
+        {left: '$', right: '$', display: false}
+      ],
+      throwOnError: false
+    });
+  } catch (e) {
+    console.error('Error rendering math:', e);
+  }
+}
+
+// -----------------------------------------------------
+// MULTIMODAL: IMAGE PASTE & PREVIEW HANDLING
+// -----------------------------------------------------
+userInput.addEventListener('paste', (event) => {
+  const items = event.clipboardData.items;
+  for (const item of items) {
+    if (item.type.indexOf("image") !== -1) {
+      const file = item.getAsFile();
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const base64Data = e.target.result;
+        const imageObj = { id: nextImageId++, data: base64Data };
+        pastedImages.push(imageObj);
+        addImagePreview(imageObj.data, imageObj.id);
+      };
+      reader.readAsDataURL(file);
+    }
+  }
+});
+
+function addImagePreview(base64Data, imageId) {
+  const previewDiv = document.createElement('div');
+  previewDiv.classList.add('image-preview');
+  previewDiv.dataset.imageId = imageId;
+
+  const imgEl = document.createElement('img');
+  imgEl.src = base64Data;
+
+  const removeBtn = document.createElement('button');
+  removeBtn.classList.add('remove-image');
+  removeBtn.innerHTML = '×';
+  removeBtn.addEventListener('click', () => {
+    removeImagePreview(imageId, previewDiv);
+  });
+
+  previewDiv.appendChild(imgEl);
+  previewDiv.appendChild(removeBtn);
+  imagePreviewContainer.appendChild(previewDiv);
+}
+
+function removeImagePreview(imageId, previewDiv) {
+  pastedImages = pastedImages.filter(img => img.id !== parseInt(imageId));
+  previewDiv.remove();
+}
+
+// -----------------------------------------------------
+// EXPORT & IMPORT CONVERSATIONS
+// -----------------------------------------------------
+function exportConversation() {
+  const exportObj = {
+    model: currentModel || "",
+    backup_models: currentBackupModel || "",
+    messages: conversation
+  };
+  const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportObj, null, 2));
+  const downloadAnchorNode = document.createElement('a');
+  downloadAnchorNode.setAttribute("href", dataStr);
+  downloadAnchorNode.setAttribute("download", "conversation.json");
+  document.body.appendChild(downloadAnchorNode);
+  downloadAnchorNode.click();
+  downloadAnchorNode.remove();
+}
+
+exportChatButton.addEventListener('click', exportConversation);
+
+function updateExportButtonVisibility() {
+  exportChatButton.style.display = conversation.length > 0 ? 'inline-flex' : 'none';
+}
+
+importFileInput.addEventListener('change', handleImportFile);
+
+function handleImportFile(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const importedData = JSON.parse(e.target.result);
       
-      scrollChatToBottom();
-      updateExportButtonVisibility();
-      currentModel = modelSelect.value;
-    }
-
-    function resetState() {
-      leftoverLine = "";
-      inCodeBlock = false;
-      codeLines = [];
-      currentBotMessageGroup = null;
-      currentBotMessageContainer = null;
-      currentPartialTextElement = null;
-      inThinkBlock = false;
-      currentThinkBlock = null;
-      userInput.value = '';
-      pastedImages = [];
-      imagePreviewContainer.innerHTML = '';
-      userInput.style.height = 'auto';
-    }
-
-    // -----------------------------------------------------
-    // SEND MESSAGE & STREAM RESPONSE
-    // -----------------------------------------------------
-    async function sendMessage() {
-      // Abort any active streams
       if (activeAbortControllers.length > 0) {
         activeAbortControllers.forEach(controller => controller.abort());
         activeAbortControllers = [];
-        sendButton.textContent = 'Send';
-        sendButton.style.backgroundColor = 'var(--accent-primary)';
       }
-
-      const message = userInput.value.trim();
-      if (!message && pastedImages.length === 0) return;
-
-      // User bubble
-      appendUserMessage(message, pastedImages.map(img => img.data));
       
-      // Add message to conversation array
-      let userMessageObj = { role: 'user', content: message };
-      if (pastedImages.length > 0) {
-        userMessageObj.images = pastedImages.map(img => img.data);
+      if (typeof importedData !== "object" || !Array.isArray(importedData.messages)) {
+        throw new Error("Imported JSON must have a 'messages' array.");
       }
-      conversation.push(userMessageObj);
-      updateExportButtonVisibility();
       
-      // Get selected model
-      currentModel = modelSelect.value;
-      currentBackupModel = backupModelSelect.value;
-
-      // Prepare images for API
-      const imageDataArray = pastedImages.map(img => img.data);
-      
-      // Reset input and images
-      userInput.value = '';
-      userInput.style.height = 'auto';
-      pastedImages = [];
-      imagePreviewContainer.innerHTML = '';
-
-      // Create bot message group for response
-      const messages = createBotMessageGroup();
-      
-      // Reset state for new bot message
-      resetState();
-      scrollChatToBottom();
-
-      const controller = new AbortController();
-      activeAbortControllers.push(controller);
-      currentRequestController = controller;
-
-      sendButton.textContent = 'Stop';
-      sendButton.style.backgroundColor = 'var(--accent-danger)';
-
-      const token = localStorage.getItem('token');
-      const headers = { 'Content-Type': 'application/json' };
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
+      // Validate messages
+      for (let i = 0; i < importedData.messages.length; i++) {
+        const msg = importedData.messages[i];
+        if (typeof msg !== "object" || !("role" in msg) || !("content" in msg)) {
+          throw new Error(`Invalid message at index ${i}: Missing role or content.`);
+        }
+        if (!["user","assistant"].includes(msg.role)) {
+          throw new Error(`Invalid role at index ${i}: ${msg.role}`);
+        }
+        if (typeof msg.content !== "string") {
+          throw new Error(`Invalid content at index ${i}. Must be string.`);
+        }
+        if ("images" in msg) {
+          if (!Array.isArray(msg.images) || !msg.images.every(item => typeof item === 'string')) {
+            throw new Error(`Invalid images array at index ${i}.`);
+          }
+        }
       }
+      
+      if (typeof importedData.model === "string") {
+        setModelIfExists(importedData.model);
+      }
+      
+      conversation = importedData.messages;
+      renderConversationFromArray();
+      
+    } catch (ex) {
+      alert("Failed to import conversation: " + ex.message);
+      console.error(ex);
+    }
+  };
+  reader.readAsText(file);
+}
 
+function setModelIfExists(modelName) {
+  const opts = modelSelect.options;
+  for (let i = 0; i < opts.length; i++) {
+    if (opts[i].value === modelName) {
+      modelSelect.selectedIndex = i;
+      currentModel = modelName;
+      return;
+    }
+  }
+  // If not found, leave the current selection unchanged
+}
+
+function resetState() {
+  leftoverLine = "";
+  inCodeBlock = false;
+  codeLines = [];
+  currentBotMessageGroup = null;
+  currentBotMessageContainer = null;
+  currentPartialTextElement = null;
+  inThinkBlock = false;
+  currentThinkBlock = null;
+  userInput.value = '';
+  pastedImages = [];
+  imagePreviewContainer.innerHTML = '';
+  userInput.style.height = 'auto';
+  pendingLines = []; // Reset pending lines
+}
+
+// -----------------------------------------------------
+// SEND MESSAGE & STREAM RESPONSE
+// -----------------------------------------------------
+async function sendMessage() {
+  // Abort any active streams
+  if (activeAbortControllers.length > 0) {
+    activeAbortControllers.forEach(controller => controller.abort());
+    activeAbortControllers = [];
+    sendButton.textContent = 'Send';
+    sendButton.style.backgroundColor = 'var(--accent-primary)';
+  }
+
+  const message = userInput.value.trim();
+  if (!message && pastedImages.length === 0) return;
+
+  // User bubble
+  appendUserMessage(message, pastedImages.map(img => img.data));
+  
+  // Add message to conversation array
+  let userMessageObj = { role: 'user', content: message };
+  if (pastedImages.length > 0) {
+    userMessageObj.images = pastedImages.map(img => img.data);
+  }
+  conversation.push(userMessageObj);
+  updateExportButtonVisibility();
+  
+  // Get selected model
+  currentModel = modelSelect.value;
+  currentBackupModel = backupModelSelect.value;
+
+  // Prepare images for API
+  const imageDataArray = pastedImages.map(img => img.data);
+  
+  // Reset input and images
+  userInput.value = '';
+  userInput.style.height = 'auto';
+  pastedImages = [];
+  imagePreviewContainer.innerHTML = '';
+
+  // Create bot message group for response
+  const messages = createBotMessageGroup();
+  
+  // Reset state for new bot message
+  resetState();
+  scrollChatToBottom();
+
+  const controller = new AbortController();
+  activeAbortControllers.push(controller);
+  currentRequestController = controller;
+
+  sendButton.textContent = 'Stop';
+  sendButton.style.backgroundColor = 'var(--accent-danger)';
+
+  const token = localStorage.getItem('token');
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  try {
+    const response = await fetch('/chat-completion', {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify({ 
+        model: currentModel, 
+        backup_models: currentBackupModel,
+        messages: conversation, 
+        stream: true,
+        image_b64: imageDataArray,
+        conversation_id: currentConversationId,
+        timeout_threshold: parseFloat(timeoutThresholdInput.value)
+      }),
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      let errorMessage = 'An error occurred while processing your message';
       try {
-        const response = await fetch('/chat-completion', {
-          method: 'POST',
-          headers: headers,
-          body: JSON.stringify({ 
-            model: currentModel, 
-            backup_models: currentBackupModel,
-            messages: conversation, 
-            stream: true,
-            image_b64: imageDataArray,
-            conversation_id: currentConversationId,
-            timeout_threshold: parseFloat(timeoutThresholdInput.value)
-          }),
-          signal: controller.signal
-        });
-
-        if (!response.ok) {
-          let errorMessage = 'An error occurred while processing your message';
-          try {
-            const errorJson = await response.json();
-            if (errorJson.detail) {
-              errorMessage = errorJson.detail;
-            }
-          } catch (jsonError) {
-            // Fallback to generic error
-          }
-          
-          const errorMsg = document.createElement('div');
-          errorMsg.classList.add('chat-message', 'bot');
-          errorMsg.style.backgroundColor = 'var(--accent-danger)';
-          errorMsg.textContent = errorMessage;
-          messages.appendChild(errorMsg);
-          return;
+        const errorJson = await response.json();
+        if (errorJson.detail) {
+          errorMessage = errorJson.detail;
         }
+      } catch (jsonError) {
+        // Fallback to generic error
+      }
+      
+      const errorMsg = document.createElement('div');
+      errorMsg.classList.add('chat-message', 'bot');
+      errorMsg.style.backgroundColor = 'var(--accent-danger)';
+      errorMsg.textContent = errorMessage;
+      messages.appendChild(errorMsg);
+      return;
+    }
 
-        if (!response.body) {
-          throw new Error('No readable stream in response.');
-        }
+    if (!response.body) {
+      throw new Error('No readable stream in response.');
+    }
+    
+    scrollChatToBottom();
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let botMessageFull = "";
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      const chunk = decoder.decode(value);
+      buffer += chunk;
+      
+      // Process complete JSON objects that end with newline
+      let newlineIndex;
+      while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.substring(0, newlineIndex).trim();
+        buffer = buffer.substring(newlineIndex + 1);
         
-        scrollChatToBottom();
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let botMessageFull = "";
-        let buffer = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          
-          const chunk = decoder.decode(value);
-          buffer += chunk;
-          
-          // Process complete JSON objects that end with newline
-          let newlineIndex;
-          while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
-            const line = buffer.substring(0, newlineIndex).trim();
-            buffer = buffer.substring(newlineIndex + 1);
-            
-            if (line) {
-              try {
-                const jsonObj = JSON.parse(line);
-                if (jsonObj && jsonObj.message !== undefined) {
-                  const messageContent = jsonObj.message;
-                  botMessageFull += messageContent;
-                  parseAndAppendChunk(messages, messageContent);
-                }
-              } catch (e) {
-                console.error('Error parsing JSON from stream:', e, 'Line:', line);
-                // If JSON parsing fails, treat the line as raw text
-                botMessageFull += line;
-                parseAndAppendChunk(messages, line);
-              }
-            }
-          }
-          
-          // yield control briefly
-          await new Promise(r => setTimeout(r, 0));
-        }
-
-        // Process any remaining text in the buffer
-        if (buffer.trim()) {
+        if (line) {
           try {
-            const jsonObj = JSON.parse(buffer.trim());
+            const jsonObj = JSON.parse(line);
             if (jsonObj && jsonObj.message !== undefined) {
               const messageContent = jsonObj.message;
               botMessageFull += messageContent;
               parseAndAppendChunk(messages, messageContent);
             }
           } catch (e) {
-            console.error('Error parsing final JSON from stream:', e);
-            // If JSON parsing fails, treat the buffer as raw text
-            botMessageFull += buffer;
-            parseAndAppendChunk(messages, buffer);
+            console.error('Error parsing JSON from stream:', e, 'Line:', line);
+            // If JSON parsing fails, treat the line as raw text
+            botMessageFull += line;
+            parseAndAppendChunk(messages, line);
           }
         }
+      }
+      
+      // yield control briefly
+      await new Promise(r => setTimeout(r, 0));
+    }
 
-        if (leftoverLine) {
-          if (currentPartialTextElement && currentPartialTextElement.parentNode) {
-            currentPartialTextElement.parentNode.removeChild(currentPartialTextElement);
-            currentPartialTextElement = null;
-          }
-          processLine(messages, leftoverLine);
-          leftoverLine = "";
+    // Process any remaining text in the buffer
+    if (buffer.trim()) {
+      try {
+        const jsonObj = JSON.parse(buffer.trim());
+        if (jsonObj && jsonObj.message !== undefined) {
+          const messageContent = jsonObj.message;
+          botMessageFull += messageContent;
+          parseAndAppendChunk(messages, messageContent);
         }
-        
-        // Store final bot text in conversation
-        conversation.push({ role: 'assistant', content: botMessageFull });
-        updateExportButtonVisibility();
-
-        // If server returned a conversation ID, store it & refresh conversation list
-        const conversationId = response.headers.get('X-Conversation-ID');
-        if (conversationId) {
-          currentConversationId = conversationId;
-          fetchConversations(); // Refresh sidebar
-        }
-
-      } catch (err) {
-        if (err.name === 'AbortError') {
-          // Generation canceled
-        } else {
-          console.error('Error streaming:', err);
-          
-          const errorMsg = document.createElement('div');
-          errorMsg.classList.add('chat-message', 'bot');
-          errorMsg.style.backgroundColor = 'var(--accent-danger)';
-          errorMsg.textContent = 'Error: ' + err.message;
-          messages.appendChild(errorMsg);
-        }
-      } finally {
-        activeAbortControllers = activeAbortControllers.filter(c => c !== controller);
-        if (currentRequestController === controller) {
-          sendButton.textContent = 'Send';
-          sendButton.style.backgroundColor = 'var(--accent-primary)';
-        }
+      } catch (e) {
+        console.error('Error parsing final JSON from stream:', e);
+        // If JSON parsing fails, treat the buffer as raw text
+        botMessageFull += buffer;
+        parseAndAppendChunk(messages, buffer);
       }
     }
 
-    sendButton.addEventListener('click', sendMessage);
-    
-    userInput.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendMessage();
+    if (leftoverLine) {
+      if (currentPartialTextElement && currentPartialTextElement.parentNode) {
+        currentPartialTextElement.parentNode.removeChild(currentPartialTextElement);
+        currentPartialTextElement = null;
       }
-    });
+      processLine(messages, leftoverLine);
+      leftoverLine = "";
+    }
+    
+    // Store final bot text in conversation
+    conversation.push({ role: 'assistant', content: botMessageFull });
+    updateExportButtonVisibility();
 
-    // When user clicks "New Chat", reset local conversation and re-fetch
-    newChatButton.addEventListener('click', () => {
-      conversation = [];
-      chatWindow.innerHTML = '';
-      resetState();
-      currentConversationId = null; // Reset ID
-
-      updateExportButtonVisibility();
+    // If server returned a conversation ID, store it & refresh conversation list
+    const conversationId = response.headers.get('X-Conversation-ID');
+    if (conversationId) {
+      currentConversationId = conversationId;
       fetchConversations(); // Refresh sidebar
-    });
+    }
 
-    // -----------------------------------------------------
-    // AUTHENTICATION FUNCTIONS & LOGIC
-    // -----------------------------------------------------
-    function showModal(modalId) {
-      document.getElementById(modalId).classList.add('active');
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      // Generation canceled
+    } else {
+      console.error('Error streaming:', err);
+      
+      const errorMsg = document.createElement('div');
+      errorMsg.classList.add('chat-message', 'bot');
+      errorMsg.style.backgroundColor = 'var(--accent-danger)';
+      errorMsg.textContent = 'Error: ' + err.message;
+      messages.appendChild(errorMsg);
+    }
+  } finally {
+    activeAbortControllers = activeAbortControllers.filter(c => c !== controller);
+    if (currentRequestController === controller) {
+      sendButton.textContent = 'Send';
+      sendButton.style.backgroundColor = 'var(--accent-primary)';
+    }
+  }
+}
+
+sendButton.addEventListener('click', sendMessage);
+
+userInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
+
+// When user clicks "New Chat", reset local conversation and re-fetch
+newChatButton.addEventListener('click', () => {
+  conversation = [];
+  chatWindow.innerHTML = '';
+  resetState();
+  currentConversationId = null; // Reset ID
+
+  updateExportButtonVisibility();
+  fetchConversations(); // Refresh sidebar
+});
+
+// Update loadConversation to show an error message if it fails
+async function loadConversation(conversationId) {
+  const token = localStorage.getItem('token');
+  if (!token) return;
+  
+  try {
+    // Show loading indicator
+    const loadingMsg = document.createElement('div');
+    loadingMsg.id = 'loading-message';
+    loadingMsg.style.textAlign = 'center';
+    loadingMsg.style.padding = '20px';
+    loadingMsg.style.color = 'var(--text-secondary)';
+    loadingMsg.textContent = 'Loading conversation...';
+    chatWindow.innerHTML = '';
+    chatWindow.appendChild(loadingMsg);
+    
+    const response = await fetch(`/conversations/${conversationId}`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to load conversation');
     }
     
-    function closeModal(modalId) {
-      document.getElementById(modalId).classList.remove('active');
+    const data = await response.json();
+    
+    // Update currentConversationId immediately
+    currentConversationId = conversationId;
+    
+    // If the server returns data.model, update the model dropdown
+    if (typeof data.model === "string") {
+      setModelIfExists(data.model);
     }
     
-    function updateAuthButtons() {
-      const authButtons = document.getElementById('auth-buttons');
-      const token = localStorage.getItem('token');
-      
-      if (token) {
-        try {
-          const payload = JSON.parse(atob(token.split('.')[1]));
-          const username = payload.username;
-          
-          authButtons.innerHTML = `
-            <div class="user-info">
-              <span>${username}</span>
-              <button class="button-secondary" onclick="logout()">Sign Out</button>
-            </div>
-          `;
-        } catch (e) {
-          localStorage.removeItem('token');
-          updateAuthButtons();
-        }
-      } else {
-        authButtons.innerHTML = `
-          <button class="button-secondary" onclick="showModal('signup-modal')">Sign Up</button>
-          <button class="button-primary" onclick="showModal('login-modal')">Sign In</button>
-        `;
-      }
+    conversation = data.messages;
+    
+    // Remove the loading message
+    const loadingElement = document.getElementById('loading-message');
+    if (loadingElement) {
+      loadingElement.remove();
     }
-
-    document.getElementById('signup-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const username = document.getElementById('signup-username').value;
-      const password = document.getElementById('signup-password').value;
+    
+    // Render the conversation with a small delay to prevent UI freeze
+    setTimeout(() => {
+      renderConversationFromArray();
       
-      try {
-        const response = await fetch('/signup', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password }),
-        });
-        
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.detail || 'Signup failed');
-        }
-        
-        alert('Signup successful! Please sign in.');
-        closeModal('signup-modal');
-        showModal('login-modal');
-      } catch (error) {
-        alert(error.message);
+      // Close the sidebar on mobile after selection
+      if (window.innerWidth <= 768) {
+        sidebar.classList.remove('open');
       }
-    });
+    }, 50);
+    
+  } catch (error) {
+    console.error('Error loading conversation:', error);
+    
+    // Show error message in chat window
+    chatWindow.innerHTML = `
+      <div style="text-align: center; padding: 20px; color: var(--accent-danger);">
+        Error loading conversation: ${error.message}
+        <br><br>
+        <button onclick="window.location.reload()" class="button-primary">
+          Reload page
+        </button>
+      </div>
+    `;
+  }
+}
 
-    document.getElementById('login-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const username = document.getElementById('login-username').value;
-      const password = document.getElementById('login-password').value;
+// -----------------------------------------------------
+// AUTHENTICATION FUNCTIONS & LOGIC
+// -----------------------------------------------------
+function showModal(modalId) {
+  document.getElementById(modalId).classList.add('active');
+}
+
+function closeModal(modalId) {
+  document.getElementById(modalId).classList.remove('active');
+}
+
+function updateAuthButtons() {
+  const authButtons = document.getElementById('auth-buttons');
+  const token = localStorage.getItem('token');
+  
+  if (token) {
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      const username = payload.username;
       
-      try {
-        const response = await fetch('/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password }),
-        });
-        
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.detail || 'Login failed');
-        }
-        
-        const data = await response.json();
-        localStorage.setItem('token', data.token);
-        updateAuthButtons();
-        closeModal('login-modal');
-        fetchConversations(); // Refresh conversations after login
-      } catch (error) {
-        alert(error.message);
-      }
-    });
-
-    // Logout function
-    function logout() {
+      authButtons.innerHTML = `
+        <div class="user-info">
+          <span>${username}</span>
+          <button class="button-secondary" onclick="logout()">Sign Out</button>
+        </div>
+      `;
+    } catch (e) {
       localStorage.removeItem('token');
       updateAuthButtons();
-      document.getElementById('conversation-list').innerHTML = '';
-      document.getElementById('not-signed-in-message').style.display = 'block';
-      
-      // Reset current conversation state in the frontend
-      conversation = [];
-      chatWindow.innerHTML = '';
-      resetState();
-      currentConversationId = null;
     }
+  } else {
+    authButtons.innerHTML = `
+      <button class="button-secondary" onclick="showModal('signup-modal')">Sign Up</button>
+      <button class="button-primary" onclick="showModal('login-modal')">Sign In</button>
+    `;
+  }
+}
 
-    // Make logout function global for onclick handlers
-    window.logout = logout;
-    window.showModal = showModal;
-    window.closeModal = closeModal;
-
-    // -----------------------------------------------------
-    // SIDEBAR: TOGGLE & FETCHING CONVERSATIONS
-    // -----------------------------------------------------
-    toggleSidebarButton.addEventListener('click', () => {
-      sidebar.classList.toggle('open');
-      document.body.classList.toggle('sidebar-collapsed');
+document.getElementById('signup-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const username = document.getElementById('signup-username').value;
+  const password = document.getElementById('signup-password').value;
+  
+  try {
+    const response = await fetch('/signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
     });
-
-    async function fetchConversations() {
-      const token = localStorage.getItem('token');
-      if (!token) {
-        document.getElementById('not-signed-in-message').style.display = 'block';
-        document.getElementById('conversation-list').innerHTML = '';
-        return;
-      }
-      
-      document.getElementById('not-signed-in-message').style.display = 'none';
-      
-      try {
-        const response = await fetch('/conversations', {
-          headers: { 'Authorization': `Bearer ${token}` },
-        });
-        
-        if (!response.ok) {
-          if(response.status == 401) {
-            logout();
-            return
-          }
-          throw new Error('Failed to fetch conversations');
-        }
-        
-        const data = await response.json();
-        const conversationList = document.getElementById('conversation-list');
-        conversationList.innerHTML = '';
-        
-        if (data.conversations.length === 0) {
-          const emptyState = document.createElement('div');
-          emptyState.classList.add('empty-state');
-          emptyState.textContent = 'No saved conversations yet.';
-          conversationList.appendChild(emptyState);
-          return;
-        }
-        
-        data.conversations.forEach(conv => {
-          const div = document.createElement('div');
-          div.classList.add('conversation-preview');
-          div.innerHTML = `
-            <p>${conv.preview || 'Untitled conversation'}</p>
-            <small>${new Date(conv.updated_at).toLocaleString()}</small>
-          `;
-          div.addEventListener('click', () => loadConversation(conv.conversation_id));
-          conversationList.appendChild(div);
-        });
-      } catch (error) {
-        console.error('Error fetching conversations:', error);
-      }
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || 'Signup failed');
     }
+    
+    alert('Signup successful! Please sign in.');
+    closeModal('signup-modal');
+    showModal('login-modal');
+  } catch (error) {
+    alert(error.message);
+  }
+});
 
-    async function loadConversation(conversationId) {
-      const token = localStorage.getItem('token');
-      if (!token) return;
-      
-      try {
-        const response = await fetch(`/conversations/${conversationId}`, {
-          headers: { 'Authorization': `Bearer ${token}` },
-        });
-        
-        if (!response.ok) {
-          throw new Error('Failed to load conversation');
-        }
-        
-        const data = await response.json();
-        
-        // Update currentConversationId immediately
-        currentConversationId = conversationId;
-        
-        // If the server returns data.model, update the model dropdown
-        if (typeof data.model === "string") {
-          setModelIfExists(data.model);
-        }
-        
-        conversation = data.messages;
-        renderConversationFromArray();
-        
-        // Close the sidebar on mobile after selection
-        if (window.innerWidth <= 768) {
-          sidebar.classList.remove('open');
-        }
-      } catch (error) {
-        console.error('Error loading conversation:', error);
+document.getElementById('login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const username = document.getElementById('login-username').value;
+  const password = document.getElementById('login-password').value;
+  
+  try {
+    const response = await fetch('/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || 'Login failed');
+    }
+    
+    const data = await response.json();
+    localStorage.setItem('token', data.token);
+    updateAuthButtons();
+    closeModal('login-modal');
+    fetchConversations(); // Refresh conversations after login
+  } catch (error) {
+    alert(error.message);
+  }
+});
+
+// Logout function
+function logout() {
+  localStorage.removeItem('token');
+  updateAuthButtons();
+  document.getElementById('conversation-list').innerHTML = '';
+  document.getElementById('not-signed-in-message').style.display = 'block';
+  
+  // Reset current conversation state in the frontend
+  conversation = [];
+  chatWindow.innerHTML = '';
+  resetState();
+  currentConversationId = null;
+}
+
+// Make logout function global for onclick handlers
+window.logout = logout;
+window.showModal = showModal;
+window.closeModal = closeModal;
+
+// -----------------------------------------------------
+// SIDEBAR: TOGGLE & FETCHING CONVERSATIONS
+// -----------------------------------------------------
+toggleSidebarButton.addEventListener('click', () => {
+  sidebar.classList.toggle('open');
+  document.body.classList.toggle('sidebar-collapsed');
+});
+
+async function fetchConversations() {
+  const token = localStorage.getItem('token');
+  if (!token) {
+    document.getElementById('not-signed-in-message').style.display = 'block';
+    document.getElementById('conversation-list').innerHTML = '';
+    return;
+  }
+  
+  document.getElementById('not-signed-in-message').style.display = 'none';
+  
+  try {
+    const response = await fetch('/conversations', {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    
+    if (!response.ok) {
+      if(response.status == 401) {
+        logout();
+        return
       }
+      throw new Error('Failed to fetch conversations');
     }
+    
+    const data = await response.json();
+    const conversationList = document.getElementById('conversation-list');
+    conversationList.innerHTML = '';
+    
+    if (data.conversations.length === 0) {
+      const emptyState = document.createElement('div');
+      emptyState.classList.add('empty-state');
+      emptyState.textContent = 'No saved conversations yet.';
+      conversationList.appendChild(emptyState);
+      return;
+    }
+    
+    data.conversations.forEach(conv => {
+      const div = document.createElement('div');
+      div.classList.add('conversation-preview');
+      div.innerHTML = `
+        <p>${conv.preview || 'Untitled conversation'}</p>
+        <small>${new Date(conv.updated_at).toLocaleString()}</small>
+      `;
+      div.addEventListener('click', () => loadConversation(conv.conversation_id));
+      conversationList.appendChild(div);
+    });
+  } catch (error) {
+    console.error('Error fetching conversations:', error);
+  }
+}
 
-    // Initial setup
-    if (window.innerWidth <= 768) {
-      document.body.classList.add('sidebar-collapsed');
-    } else {
-      sidebar.classList.add('open');
-    }
+// Initial setup
+if (window.innerWidth <= 768) {
+  document.body.classList.add('sidebar-collapsed');
+} else {
+  sidebar.classList.add('open');
+}
   </script>
 </body>
 </html>

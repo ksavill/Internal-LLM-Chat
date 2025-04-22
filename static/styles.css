@@ -242,6 +242,15 @@ body {
     border-top-left-radius: 4px;
 }
 
+/* Message separator line */
+.message-separator {
+    border: 0;
+    height: 1px;
+    background-color: var(--border-color);
+    margin: 10px 0;
+    opacity: 0.5;
+}
+
 /* Thinking block */
 .bot-think {
     background-color: var(--thinking-bg);
@@ -381,6 +390,15 @@ p code, li code {
     border-radius: 4px;
     font-family: 'Fira Code', Consolas, Monaco, 'Andale Mono', monospace;
     font-size: 0.9em;
+}
+
+/* File header in code blocks */
+.file-header {
+    font-family: monospace;
+    font-size: 0.9em;
+    color: var(--text-secondary);
+    margin-top: -4px;
+    padding-bottom: 4px;
 }
 
 /* ----------------------------------
@@ -648,6 +666,112 @@ button {
 .form-control:focus {
     outline: none;
     border-color: var(--accent-primary);
+}
+
+/* ----------------------------------
+    LaTeX and Enhanced Markdown Support
+    ---------------------------------- */
+/* LaTeX rendering styles */
+.katex-display {
+    margin: 1em 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 8px 0;
+}
+
+.katex {
+    font-size: 1.1em;
+}
+
+/* Enhanced Markdown support - with fixed bullet point display */
+.chat-message ul, 
+.chat-message ol {
+    list-style-position: inside; /* Keep bullets inside the content box */
+    margin-left: 0; /* Remove left margin that pushes bullets outside */
+    margin-bottom: 10px;
+    padding-left: 10px; /* Reduced padding */
+}
+
+.chat-message li {
+    margin-bottom: 4px;
+    text-indent: -1.2em; /* Create hanging indent effect */
+    padding-left: 1.2em; /* Balance the negative text-indent */
+    word-wrap: break-word; /* Ensure text wraps properly */
+}
+
+/* For nested lists, adjust styling */
+.chat-message li ul,
+.chat-message li ol {
+    margin-top: 4px;
+    margin-left: 5px;
+    padding-left: 5px;
+}
+
+/* Optional: improve spacing for paragraph elements within list items */
+.chat-message li p {
+    margin-bottom: 0.5em;
+    display: inline-block;
+}
+
+.chat-message blockquote {
+    border-left: 3px solid var(--accent-primary);
+    padding-left: 10px;
+    margin: 10px 0;
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+.chat-message h1, 
+.chat-message h2, 
+.chat-message h3, 
+.chat-message h4, 
+.chat-message h5, 
+.chat-message h6 {
+    margin: 12px 0 8px 0;
+    line-height: 1.2;
+    font-weight: 600;
+}
+
+.chat-message h1 { font-size: 1.8em; }
+.chat-message h2 { font-size: 1.5em; }
+.chat-message h3 { font-size: 1.3em; }
+.chat-message h4 { font-size: 1.2em; }
+.chat-message h5 { font-size: 1.1em; }
+.chat-message h6 { font-size: 1em; }
+
+.chat-message img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 6px;
+    margin: 10px 0;
+    border: 1px solid var(--border-color);
+}
+
+.chat-message table {
+    border-collapse: collapse;
+    margin: 10px 0;
+    width: 100%;
+    overflow-x: auto;
+    display: block;
+}
+
+.chat-message th, 
+.chat-message td {
+    border: 1px solid var(--border-color);
+    padding: 8px;
+    text-align: left;
+}
+
+.chat-message th {
+    background-color: var(--bg-tertiary);
+}
+
+.chat-message code {
+    background-color: rgba(255, 255, 255, 0.1);
+    padding: 2px 4px;
+    border-radius: 4px;
+    font-family: 'Fira Code', Consolas, Monaco, 'Andale Mono', monospace;
+    font-size: 0.9em;
 }
 
 /* ----------------------------------
