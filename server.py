@@ -463,7 +463,7 @@ def append_new_user_messages(db_msgs: List[ChatMessage], incoming_msgs: List[Cha
     return db_msgs + tail
 
 @app.post("/chat-completion", response_model=ChatCompletionResponse)
-@app.post("/api/chat/completion", response_model=ChatCompletionResponse)
+@app.post("/api/chat-completion", response_model=ChatCompletionResponse)
 async def chat_completion(
     chat_req: ChatRequest,
     request: Request,
