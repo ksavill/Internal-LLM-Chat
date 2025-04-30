@@ -803,8 +803,11 @@ customer_app.add_api_route("/conversations", shared_get_conversations, methods=[
 customer_app.add_api_route("/conversations/{conversation_id}", shared_get_conversation_detail, methods=["GET"], response_model=ConversationDetailResponse)
 customer_app.add_api_route("/ollama-models", shared_get_ollama_models, methods=["GET"], response_model=OllamaModelsResponse)
 customer_app.add_api_route("/openai-models", shared_get_openai_models, methods=["GET"], response_model=OpenAIModelsResponse)
+customer_app.add_api_route("/api/ollama-models", shared_get_ollama_models, methods=["GET"], response_model=OllamaModelsResponse)
+customer_app.add_api_route("/api/openai-models", shared_get_openai_models, methods=["GET"], response_model=OpenAIModelsResponse)
 customer_app.add_api_route("/request-profiles", list_request_profiles, methods=["GET"], response_model=List[str])
 customer_app.add_api_route("/chat-completion", chat_completion, methods=["POST"], response_model=ChatCompletionResponse)
+customer_app.add_api_route("/api/chat-completion", chat_completion, methods=["POST"], response_model=ChatCompletionResponse)
 
 customer_app.add_api_route("/", shared_get_index, methods=["GET"], response_class=FileResponse, response_model=None)
 customer_app.add_api_route("/favicon.ico", shared_favicon, methods=["GET"], response_class=FileResponse, include_in_schema=False, response_model=None)
