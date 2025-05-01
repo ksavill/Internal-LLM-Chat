@@ -776,23 +776,19 @@
       
       copyBtn.addEventListener('click', () => {
         const text = codeEl.textContent;
-        navigator.clipboard.writeText(text).then(() => {
-          copyBtn.innerHTML = `
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="20 6 9 17 4 12"></polyline>
-            </svg>
-            Copied!
-          `;
-          setTimeout(() => {
-            copyBtn.innerHTML = `
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-              </svg>
-              Copy
-            `;
-          }, 1500);
-        });
+        
+        // Try using the clipboard API first
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(text).then(() => {
+            showCopySuccess(copyBtn);
+          }).catch(() => {
+            // If clipboard API fails, use fallback method
+            fallbackCopyText(text, copyBtn);
+          });
+        } else {
+          // Use fallback method if clipboard API is not available
+          fallbackCopyText(text, copyBtn);
+        }
       });
       
       scrollChatToBottomIfNeeded();
@@ -1829,6 +1825,74 @@ If you need to highlight syntax, explain code, or point out specific sections, d
       document.body.classList.add('sidebar-collapsed');
     } else {
       sidebar.classList.add('open');
+    }
+
+    // Helper function to show copy success state
+    function showCopySuccess(button) {
+      button.innerHTML = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        Copied!
+      `;
+      setTimeout(() => {
+        button.innerHTML = `
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+          </svg>
+          Copy
+        `;
+      }, 1500);
+    }
+    
+    // Fallback method for copying text
+    function fallbackCopyText(text, button) {
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      
+      // Avoid scrolling to bottom
+      textArea.style.top = '0';
+      textArea.style.left = '0';
+      textArea.style.position = 'fixed';
+      textArea.style.opacity = '0';
+      
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      
+      try {
+        const successful = document.execCommand('copy');
+        if (successful) {
+          showCopySuccess(button);
+        } else {
+          // If execCommand fails, show error
+          button.textContent = 'Copy Failed';
+          setTimeout(() => {
+            button.innerHTML = `
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              Copy
+            `;
+          }, 1500);
+        }
+      } catch (err) {
+        console.error('Fallback copy failed:', err);
+        button.textContent = 'Copy Failed';
+        setTimeout(() => {
+          button.innerHTML = `
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+            Copy
+          `;
+        }, 1500);
+      }
+      
+      document.body.removeChild(textArea);
     }
   </script>
 </body>
