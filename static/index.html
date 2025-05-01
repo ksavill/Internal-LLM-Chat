@@ -173,39 +173,109 @@
     let activeAbortControllers = [];
     let currentRequestController = null;
     
-    // Code block detection patterns
+    // Code block detection patterns - simplified to only use triple backticks
     const codeFencePatterns = [
       /^```(?:([a-zA-Z0-9_+\-.]+))?$/,   // ```lang
-      /^~~~(?:([a-zA-Z0-9_+\-.]+))?$/,   // ~~~lang
-      /^-{3,}$/,                         // --- (3+)
-      /^={3,}$/,                         // === (3+)
-      /^_{3,}$/,                         // ___ (3+)
-      /^[\u2500\u2501]{20,}$/            // ──────…  OR  ━━━━━━…  (20+ chars)
     ];
 
-    // Common language name mappings for better syntax highlighting
+    // Enhanced language aliases mapping
     const languageAliases = {
+      // JavaScript family
       'js': 'javascript',
+      'javascript': 'javascript',
+      'node': 'javascript',
+      'nodejs': 'javascript',
       'ts': 'typescript',
-      'py': 'python',
-      'rb': 'ruby',
-      'sh': 'bash',
-      'c#': 'csharp',
-      'c++': 'cpp',
-      'html+php': 'php',
-      'md': 'markdown',
-      'rust': 'rust',
-      'go': 'go',
-      'cs': 'csharp',
-      'yml': 'yaml',
-      'json': 'json',
+      'typescript': 'typescript',
       'jsx': 'jsx',
       'tsx': 'tsx',
+      'react': 'jsx',
+      'reactjs': 'jsx',
+      
+      // Python family
+      'py': 'python',
+      'python': 'python',
+      'py3': 'python',
+      'python3': 'python',
+      'jupyter': 'python',
+      
+      // Web technologies
+      'html': 'html',
+      'xhtml': 'html',
       'css': 'css',
       'sass': 'sass',
       'scss': 'scss',
+      'less': 'less',
+      'json': 'json',
+      'xml': 'xml',
+      'svg': 'svg',
+      
+      // Server-side web
+      'php': 'php',
+      'html+php': 'php',
+      
+      // Ruby
+      'rb': 'ruby',
+      'ruby': 'ruby',
+      'rails': 'ruby',
+      
+      // Shell scripting
+      'sh': 'bash',
+      'bash': 'bash',
+      'shell': 'bash',
+      'zsh': 'bash',
+      'powershell': 'powershell',
+      'ps1': 'powershell',
+      'batch': 'batch',
+      'cmd': 'batch',
+      
+      // C-family languages
+      'c': 'c',
+      'c++': 'cpp',
+      'cpp': 'cpp',
+      'cxx': 'cpp',
+      'cs': 'csharp',
+      'csharp': 'csharp',
+      'c#': 'csharp',
+      'java': 'java',
+      
+      // Other popular languages
+      'go': 'go',
+      'golang': 'go',
+      'rust': 'rust',
+      'rs': 'rust',
+      'kotlin': 'kotlin',
+      'kt': 'kotlin',
+      'swift': 'swift',
+      
+      // Data/Config
+      'yml': 'yaml',
+      'yaml': 'yaml',
+      'toml': 'toml',
+      'ini': 'ini',
+      'env': 'bash',
+      
+      // Database
       'sql': 'sql',
-      'shell': 'bash'
+      'mysql': 'sql',
+      'pgsql': 'sql',
+      'postgresql': 'sql',
+      
+      // Markdown & documentation
+      'md': 'markdown',
+      'markdown': 'markdown',
+      'tex': 'latex',
+      'latex': 'latex',
+      
+      // GraphQL
+      'graphql': 'graphql',
+      'gql': 'graphql',
+      
+      // Special cases
+      'plaintext': 'plaintext',
+      'plain': 'plaintext',
+      'text': 'plaintext',
+      'txt': 'plaintext'
     };
 
     // -----------------------------------------------------
@@ -233,7 +303,7 @@
       });
     };
 
-    // Whenever the main model changes, auto-adjust the timeout if it’s in the large-model list.
+    // Whenever the main model changes, auto-adjust the timeout if it's in the large-model list.
     function handleModelChange() {
       const selectedModel = modelSelect.value.trim();
       const largeModels = ["o1", "o1-pro", "o1-pro-high"];
@@ -409,54 +479,94 @@
       return escaped;
     }
 
+    // Enhanced language detection function
     function detectLanguage(code, declaredLang) {
       if (declaredLang) {
+        // Always prioritize explicitly declared language
         // Check if we have an alias for this language
         return languageAliases[declaredLang.toLowerCase()] || declaredLang.toLowerCase();
       }
       
-      // Simple language detection heuristics
+      // More robust language detection logic
       const firstLine = code.split('\n')[0].trim();
+      const lowerCode = code.toLowerCase();
       
-      // Python 
+      // Python detection
       if (code.includes('def ') && code.includes(':') || 
           code.includes('import ') && !code.includes(';') || 
-          firstLine.startsWith('#!/usr/bin/env python')) {
+          firstLine.startsWith('#!/usr/bin/env python') ||
+          code.includes('print(') || code.includes('if ') && code.includes(':')) {
         return 'python';
       }
       
-      // JavaScript
+      // JavaScript/TypeScript detection
       if (code.includes('function ') || 
           code.includes('=>') || 
           code.includes('const ') || 
           code.includes('let ') ||
-          firstLine.includes('use strict')) {
-        if (code.includes('<jsx') || code.includes('React')) {
+          code.includes('var ') ||
+          firstLine.includes('use strict') ||
+          code.includes('document.') ||
+          code.includes('window.')) {
+        
+        // Check if TypeScript
+        if (code.includes(': string') || 
+            code.includes(': number') || 
+            code.includes(': boolean') ||
+            code.includes('interface ') ||
+            code.includes('namespace ')) {
+          return 'typescript';
+        }
+        
+        // Check if JSX/React
+        if (code.includes('React') || 
+            code.includes('<div>') || 
+            code.includes('</') ||
+            (code.includes('import ') && code.includes(' from '))) {
           return 'jsx';
         }
+        
         return 'javascript';
       }
       
-      // HTML
+      // HTML detection
       if (code.includes('<html') || 
           code.includes('<!DOCTYPE') || 
-          (code.includes('<div') && code.includes('</div>'))) {
+          (code.includes('<div') && code.includes('</div>')) ||
+          (code.includes('<') && code.includes('</') && code.includes('>'))) {
+        
+        // Check if PHP
+        if (code.includes('<?php')) {
+          return 'php';
+        }
+        
         return 'html';
       }
       
-      // CSS
-      if (code.includes('{') && code.includes('}') && 
-          (code.includes('margin:') || code.includes('padding:') || code.includes('color:'))) {
+      // CSS detection
+      if ((code.includes('{') && code.includes('}')) && 
+          (lowerCode.includes('margin:') || 
+           lowerCode.includes('padding:') || 
+           lowerCode.includes('color:') ||
+           lowerCode.includes('background:'))) {
+        
+        // Check if SCSS
+        if (code.includes('@mixin') || code.includes('@include') || code.includes('$')) {
+          return 'scss';
+        }
+        
         return 'css';
       }
       
-      // SQL
-      if (code.toLowerCase().includes('select ') && 
-          (code.toLowerCase().includes(' from ') || code.toLowerCase().includes(' where '))) {
+      // SQL detection
+      if ((lowerCode.includes('select ') && lowerCode.includes(' from ')) || 
+          lowerCode.includes('create table ') ||
+          lowerCode.includes('insert into ') ||
+          lowerCode.includes('update ') && lowerCode.includes(' set ')) {
         return 'sql';
       }
       
-      // JSON
+      // JSON detection
       if ((code.trim().startsWith('{') && code.trim().endsWith('}')) || 
           (code.trim().startsWith('[') && code.trim().endsWith(']'))) {
         try {
@@ -467,14 +577,22 @@
         }
       }
       
-      // Bash/Shell
+      // Bash/Shell detection
       if (firstLine.startsWith('#!/bin/') || 
-          (code.includes('echo ') && code.includes('$'))) {
+          (code.includes('echo ') && code.includes('$')) ||
+          code.includes('#!/usr/bin/env bash')) {
         return 'bash';
       }
       
+      // Ruby detection
+      if (code.includes('def ') && code.includes('end') ||
+          code.includes('require ') && !code.includes(';') ||
+          firstLine.includes('#!/usr/bin/env ruby')) {
+        return 'ruby';
+      }
+      
       // If we can't detect, default to plaintext
-      return '';
+      return 'plaintext';
     }
 
     function createMessageGroup(sender) {
@@ -617,7 +735,13 @@
       
       const langTag = document.createElement('span');
       langTag.classList.add('code-lang-tag');
-      langTag.textContent = declaredLang || 'plaintext';
+      
+      // Normalize language display
+      const displayLang = declaredLang ? 
+        (languageAliases[declaredLang.toLowerCase()] || declaredLang.toLowerCase()) : 
+        'plaintext';
+      
+      langTag.textContent = displayLang;
       
       const copyBtn = document.createElement('button');
       copyBtn.classList.add('copy-button');
@@ -635,9 +759,8 @@
       const preEl = document.createElement('pre');
       const codeEl = document.createElement('code');
       
-      if (declaredLang) {
-        const normalizedLang = languageAliases[declaredLang.toLowerCase()] || declaredLang.toLowerCase();
-        codeEl.classList.add(`language-${normalizedLang}`);
+      if (displayLang !== 'plaintext') {
+        codeEl.classList.add(`language-${displayLang}`);
       }
       
       preEl.appendChild(codeEl);
@@ -710,24 +833,24 @@
       
       // Trim leading/trailing blank lines
       while (codeLines.length && codeLines[0].trim() === '') {
-          codeLines.shift();
+        codeLines.shift();
       }
       while (codeLines.length && codeLines[codeLines.length - 1].trim() === '') {
-          codeLines.pop();
+        codeLines.pop();
       }
       
       // Determine minimal indentation
       let minIndent = Infinity;
       for (const ln of codeLines) {
-          if (ln.trim() === '') continue;
-          const match = ln.match(/^(\s+)/);
-          if (match) {
-              const indentCount = match[1].length;
-              if (indentCount < minIndent) { minIndent = indentCount; }
-          } else {
-              minIndent = 0;
-              break;
-          }
+        if (ln.trim() === '') continue;
+        const match = ln.match(/^(\s+)/);
+        if (match) {
+          const indentCount = match[1].length;
+          if (indentCount < minIndent) { minIndent = indentCount; }
+        } else {
+          minIndent = 0;
+          break;
+        }
       }
       if (!Number.isFinite(minIndent)) { minIndent = 0; }
       
@@ -735,21 +858,22 @@
       const cleaned = codeLines.map(ln => ln.slice(minIndent)).join('\n');
       currentCodeElement.textContent = cleaned;
       
-      // Detect language if not already set
+      // More robust language detection
       if (!codeLines.lang || codeLines.lang === 'plaintext') {
-          const detectedLang = detectLanguage(cleaned, null);
-          if (detectedLang) {
-              currentCodeElement.className = `language-${detectedLang}`;
-              const langTag = currentCodeBlockContainer.querySelector('.code-lang-tag');
-              if (langTag) {
-                  langTag.textContent = detectedLang;
-              }
+        const detectedLang = detectLanguage(cleaned, null);
+        if (detectedLang) {
+          currentCodeElement.className = `language-${detectedLang}`;
+          const langTag = currentCodeBlockContainer.querySelector('.code-lang-tag');
+          if (langTag) {
+            langTag.textContent = detectedLang;
           }
+        }
       }
       
       // Apply syntax highlighting
       Prism.highlightElement(currentCodeElement);
       
+      // Reset state
       inCodeBlock = false;
       currentCodeElement = null;
       codeLines = [];
@@ -758,7 +882,7 @@
       currentBotMessageContainer = null; // Reset to start a new message bubble
       
       scrollChatToBottomIfNeeded();
-  }
+    }
 
     // -----------------------------------------------------
     // PARSING STREAMED CHUNKS
@@ -782,7 +906,8 @@
         }
       }
 
-      let textToProcess = leftoverLine + newText;
+      // Safely concat the leftover line with new text
+      let textToProcess = (leftoverLine || "") + newText;
       leftoverLine = "";
       const segments = textToProcess.split('\n');
       
@@ -790,9 +915,12 @@
         processLine(messages, segments[i]);
       }
       
+      // Store the last segment as leftover
       leftoverLine = segments[segments.length - 1];
 
+      // Handle partial text updating
       if (!inCodeBlock && leftoverLine) {
+        // Define trimmedLeft here where it's used
         const trimmedLeft = leftoverLine.trim();
         
         // Check if it's a fence start/end
@@ -821,31 +949,22 @@
       const trimmed = line.trim();
       
       // Check for code fence start/end
-      let isFence = false;
-      let declaredLang = null;
+      const fenceMatch = trimmed.match(/^```([a-zA-Z0-9_+\-.]*)?$/);
       
-      for (const pattern of codeFencePatterns) {
-        const match = trimmed.match(pattern);
-        if (match) {
-          isFence = true;
-          if (match[1]) { // Captured language name
-            declaredLang = match[1];
-          }
-          break;
-        }
-      }
-      
-      if (isFence) {
+      if (fenceMatch) {
         if (!inCodeBlock) {
+          // Starting a new code block
           inCodeBlock = true;
+          const declaredLang = fenceMatch[1] ? fenceMatch[1].trim() : null;
           startCodeBlock(messages, declaredLang);
         } else {
+          // Ending an existing code block
           endCodeBlock();
         }
         return;
       }
       
-      // <think> block
+      // <think> block detection remains the same
       if (trimmed === '<think>') {
         inThinkBlock = true;
         startThinkBlock(messages);
@@ -872,7 +991,7 @@
           if (!currentBotMessageContainer) {
             currentBotMessageContainer = appendTextToBotMessage(messages, line);
           } else {
-            // We're in the middle of a message - do we need a line break?
+            // We're in the middle of a message - add a line break
             const formattedLine = formatTextWithMarkup(line);
             currentBotMessageContainer.innerHTML += '<br>' + formattedLine;
           }
@@ -1045,19 +1164,7 @@
             const trimmed = line.trim();
             
             // Check for code fence
-            let isFence = false;
-            let declaredLang = null;
-            
-            for (const pattern of codeFencePatterns) {
-              const match = trimmed.match(pattern);
-              if (match) {
-                isFence = true;
-                if (match[1]) { // Captured language name
-                  declaredLang = match[1];
-                }
-                break;
-              }
-            }
+            const fenceMatch = trimmed.match(/^```([a-zA-Z0-9_+\-.]*)?$/);
             
             // Handle think blocks
             if (trimmed === '<think>') {
@@ -1085,7 +1192,7 @@
             }
             
             // Handle code blocks
-            if (isFence) {
+            if (fenceMatch) {
               // If we have accumulated text, output it first
               if (currentText) {
                 appendTextToBotMessage(messages, currentText);
@@ -1095,6 +1202,7 @@
               if (!inCodeBlock) {
                 // Start a code block
                 inCodeBlock = true;
+                const declaredLang = fenceMatch[1] ? fenceMatch[1].trim() : null;
                 const codeBlock = startCodeBlock(messages, declaredLang);
                 
                 // Collect code until closing fence
@@ -1104,17 +1212,9 @@
                 
                 while (i < lines.length) {
                   const codeLine = lines[i];
-                  let isClosingFence = false;
+                  const closingMatch = codeLine.trim().match(/^```$/);
                   
-                  // Check if this line is a closing fence
-                  for (const pattern of codeFencePatterns) {
-                    if (pattern.test(codeLine.trim())) {
-                      isClosingFence = true;
-                      break;
-                    }
-                  }
-                  
-                  if (isClosingFence) {
+                  if (closingMatch) {
                     foundClosingFence = true;
                     break;
                   }
@@ -1224,6 +1324,33 @@
       resetState();
       scrollChatToBottom();
 
+      // Updated system prompt with clearer code block formatting requirements
+      const systemPrompt = `
+You are a helpful assistant. Answer the user's question directly.
+
+FORMATTING REQUIREMENTS:
+• When the user asks for code, provide the complete, runnable code.
+• ALWAYS format code blocks using the following exact structure:
+
+\`\`\`language
+// Your code here with proper indentation
+// Include comments where helpful
+\`\`\`
+
+• Always specify the language right after the opening backticks (e.g., \`\`\`javascript, \`\`\`python)
+• Never use any other code block delimiters (no tildes ~, no HTML tags)
+• Make sure each code block has both opening AND closing triple backticks
+• For inline code, use single backticks like \`this\`
+• For nested code blocks within code examples, use indentation instead of nested backticks
+
+If you need to highlight syntax, explain code, or point out specific sections, do so outside the code blocks.
+`.trim();
+
+      const messagesToSend = [
+        { role: "system", content: systemPrompt },
+        ...conversation                 // user + prior assistant turns
+      ];
+
       const controller = new AbortController();
       activeAbortControllers.push(controller);
       currentRequestController = controller;
@@ -1244,7 +1371,7 @@
           body: JSON.stringify({ 
             model: currentModel, 
             backup_models: currentBackupModel,
-            messages: conversation, 
+            messages: messagesToSend, 
             stream: true,
             image_b64: imageDataArray,
             conversation_id: currentConversationId,

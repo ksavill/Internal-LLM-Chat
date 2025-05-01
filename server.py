@@ -283,6 +283,27 @@ async def get_interface(app: FastAPI, model_name: str):
         raise
 
 # -----------------------
+# Health and Version Endpoints
+# -----------------------
+@app.get("/healthcheck", response_model=None)
+@app.get("/api/healthcheck", response_model=None)
+async def shared_healthcheck():
+    """
+    Simple healthcheck endpoint that returns 200 OK to indicate service is running.
+    """
+    logger.info("Healthcheck endpoint called")
+    return JSONResponse(status_code=200, content={})
+
+@app.get("/version", response_model=None)
+@app.get("/api/version", response_model=None)
+async def shared_get_version():
+    """
+    Returns the current version of the application.
+    """
+    logger.info("Version endpoint called")
+    return JSONResponse(status_code=200, content={"version": "25.18.1"})
+
+# -----------------------
 # Authentication Endpoints
 # -----------------------
 @app.post("/signup", response_model=MessageResponse)
@@ -797,6 +818,10 @@ async def set_config_value(key: str, data: ConfigUpdate, request: Request, curre
 # -----------------------
 # All Customer App Routes
 # -----------------------
+customer_app.add_api_route("/healthcheck", shared_healthcheck, methods=["GET"], response_model=None)
+customer_app.add_api_route("/version", shared_get_version, methods=["GET"], response_model=None)
+customer_app.add_api_route("/api/healthcheck", shared_healthcheck, methods=["GET"], response_model=None)
+customer_app.add_api_route("/api/version", shared_get_version, methods=["GET"], response_model=None)
 customer_app.add_api_route("/signup", shared_signup, methods=["POST"], response_model=MessageResponse)
 customer_app.add_api_route("/login", shared_login, methods=["POST"], response_model=TokenResponse)
 customer_app.add_api_route("/conversations", shared_get_conversations, methods=["GET"], response_model=ConversationsListResponse)
@@ -806,6 +831,7 @@ customer_app.add_api_route("/openai-models", shared_get_openai_models, methods=[
 customer_app.add_api_route("/api/ollama-models", shared_get_ollama_models, methods=["GET"], response_model=OllamaModelsResponse)
 customer_app.add_api_route("/api/openai-models", shared_get_openai_models, methods=["GET"], response_model=OpenAIModelsResponse)
 customer_app.add_api_route("/request-profiles", list_request_profiles, methods=["GET"], response_model=List[str])
+customer_app.add_api_route("/api/request-profiles", list_request_profiles, methods=["GET"], response_model=List[str])
 customer_app.add_api_route("/chat-completion", chat_completion, methods=["POST"], response_model=ChatCompletionResponse)
 customer_app.add_api_route("/api/chat-completion", chat_completion, methods=["POST"], response_model=ChatCompletionResponse)
 
