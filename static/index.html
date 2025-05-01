@@ -1293,17 +1293,23 @@
       const message = userInput.value.trim();
       if (!message && pastedImages.length === 0) return;
 
-      // User bubble
-      appendUserMessage(message, pastedImages.map(img => img.data));
-      
-      // Add message to conversation array
-      let userMessageObj = { role: 'user', content: message };
-      if (pastedImages.length > 0) {
-        userMessageObj.images = pastedImages.map(img => img.data);
+      // Only add to conversation if this is not a retry attempt
+      if (!window.isRetryAttempt) {
+        // User bubble
+        appendUserMessage(message, pastedImages.map(img => img.data));
+        
+        // Add message to conversation array
+        let userMessageObj = { role: 'user', content: message };
+        if (pastedImages.length > 0) {
+          userMessageObj.images = pastedImages.map(img => img.data);
+        }
+        conversation.push(userMessageObj);
+        updateExportButtonVisibility();
+      } else {
+        // Reset the retry flag
+        window.isRetryAttempt = false;
       }
-      conversation.push(userMessageObj);
-      updateExportButtonVisibility();
-      
+
       // Get selected model
       currentModel = modelSelect.value;
       currentBackupModel = backupModelSelect.value;
@@ -1394,7 +1400,54 @@ If you need to highlight syntax, explain code, or point out specific sections, d
           const errorMsg = document.createElement('div');
           errorMsg.classList.add('chat-message', 'bot');
           errorMsg.style.backgroundColor = 'var(--accent-danger)';
-          errorMsg.textContent = errorMessage;
+          
+          // Create error message container
+          const errorContent = document.createElement('div');
+          errorContent.style.display = 'flex';
+          errorContent.style.justifyContent = 'space-between';
+          errorContent.style.alignItems = 'center';
+          errorContent.style.width = '100%';
+          
+          // Add error text
+          const errorText = document.createElement('span');
+          errorText.textContent = errorMessage;
+          errorContent.appendChild(errorText);
+          
+          // Add retry button
+          const retryButton = document.createElement('button');
+          retryButton.classList.add('button-secondary');
+          retryButton.style.marginLeft = '10px';
+          retryButton.textContent = 'Retry';
+          retryButton.addEventListener('click', () => {
+            // Remove the error message
+            errorMsg.remove();
+            
+            // Store the last user message and conversation state
+            const lastUserMessage = conversation[conversation.length - 1];
+            
+            // Remove the error message from conversation if it exists
+            if (conversation[conversation.length - 1].role === 'assistant' && 
+                conversation[conversation.length - 1].content.includes(errorMessage)) {
+              conversation.pop();
+            }
+            
+            // Resend the last user message
+            userInput.value = lastUserMessage.content;
+            if (lastUserMessage.images) {
+              pastedImages = lastUserMessage.images.map((data, index) => ({
+                id: index,
+                data: data
+              }));
+              pastedImages.forEach(img => addImagePreview(img.data, img.id));
+            }
+            
+            // Set a flag to prevent adding the message to conversation again
+            window.isRetryAttempt = true;
+            sendMessage();
+          });
+          errorContent.appendChild(retryButton);
+          
+          errorMsg.appendChild(errorContent);
           messages.appendChild(errorMsg);
           return;
         }
@@ -1490,7 +1543,54 @@ If you need to highlight syntax, explain code, or point out specific sections, d
           const errorMsg = document.createElement('div');
           errorMsg.classList.add('chat-message', 'bot');
           errorMsg.style.backgroundColor = 'var(--accent-danger)';
-          errorMsg.textContent = 'Error: ' + err.message;
+          
+          // Create error message container
+          const errorContent = document.createElement('div');
+          errorContent.style.display = 'flex';
+          errorContent.style.justifyContent = 'space-between';
+          errorContent.style.alignItems = 'center';
+          errorContent.style.width = '100%';
+          
+          // Add error text
+          const errorText = document.createElement('span');
+          errorText.textContent = 'Error: ' + err.message;
+          errorContent.appendChild(errorText);
+          
+          // Add retry button
+          const retryButton = document.createElement('button');
+          retryButton.classList.add('button-secondary');
+          retryButton.style.marginLeft = '10px';
+          retryButton.textContent = 'Retry';
+          retryButton.addEventListener('click', () => {
+            // Remove the error message
+            errorMsg.remove();
+            
+            // Store the last user message and conversation state
+            const lastUserMessage = conversation[conversation.length - 1];
+            
+            // Remove the error message from conversation if it exists
+            if (conversation[conversation.length - 1].role === 'assistant' && 
+                conversation[conversation.length - 1].content.includes(err.message)) {
+              conversation.pop();
+            }
+            
+            // Resend the last user message
+            userInput.value = lastUserMessage.content;
+            if (lastUserMessage.images) {
+              pastedImages = lastUserMessage.images.map((data, index) => ({
+                id: index,
+                data: data
+              }));
+              pastedImages.forEach(img => addImagePreview(img.data, img.id));
+            }
+            
+            // Set a flag to prevent adding the message to conversation again
+            window.isRetryAttempt = true;
+            sendMessage();
+          });
+          errorContent.appendChild(retryButton);
+          
+          errorMsg.appendChild(errorContent);
           messages.appendChild(errorMsg);
         }
       } finally {
