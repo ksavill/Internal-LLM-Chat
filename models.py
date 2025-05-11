@@ -57,3 +57,10 @@ class ConfigValue(BaseModel):
 
 class ConfigMessage(BaseModel):
     message: str
+
+class ForkRequest(BaseModel):
+    original_conversation_id: str
+    message_index: int # 0-based index of the last message to include in the fork
+
+class ForkResponse(BaseModel):
+    new_conversation_id: str
