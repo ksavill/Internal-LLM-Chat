@@ -964,7 +964,8 @@ async def main():
         app=customer_app,
         host="0.0.0.0",
         port=41025,
-        limit_concurrency=100,
+        limit_concurrency=1000,
+        workers=4,
         timeout_keep_alive=120,
     )
     customer_server = Server(customer_config)
@@ -974,6 +975,7 @@ async def main():
         host="0.0.0.0",
         port=8000,
         limit_concurrency=100,
+        workers=1,
         timeout_keep_alive=300,
     )
     full_server = Server(full_config)
