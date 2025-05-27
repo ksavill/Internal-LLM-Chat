@@ -1,5 +1,5 @@
 from typing import List, Optional, Union, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ConfigDict
 
 class ChatMessage(BaseModel):
     role: str
@@ -7,14 +7,16 @@ class ChatMessage(BaseModel):
     images: Optional[List[str]] = None
 
 class ChatRequest(BaseModel):
-    model: Optional[str] = "qwen2.5-coder:7b"
-    backup_models: Optional[Union[str, List[str]]] = None
-    messages: List[ChatMessage]
+    model: Optional[str] = "llama3.2:latest"
+    backup_models: Optional[Union[str, List[str]]] = Field(None, alias="backup_model")
+    messages: List[ChatMessage] = Field(..., alias="conversation_history")
     stream: Optional[bool] = False
     image_b64: Optional[Union[str, List[str]]] = None
     conversation_id: Optional[str] = None
     timeout_threshold: Optional[float] = 30.0
     request_profile: Optional[str] = None
+
+    model_config = ConfigDict(populate_by_name=True)
 
 class SignupRequest(BaseModel):
     username: str
@@ -57,3 +59,10 @@ class ConfigValue(BaseModel):
 
 class ConfigMessage(BaseModel):
     message: str
+
+class ForkRequest(BaseModel):
+    original_conversation_id: str
+    message_index: int # 0-based index of the last message to include in the fork
+
+class ForkResponse(BaseModel):
+    new_conversation_id: str

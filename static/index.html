@@ -1,1607 +1,272 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark"> <!-- Start with dark, JS will manage based on localStorage or preference -->
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Internal LLM</title>
-  <link rel="icon" href="/favicon.ico" type="image/x-icon" />
-  <link rel="stylesheet" href="/styles.css" />
-  
-  <!-- Prism.js for syntax highlighting with more languages -->
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet" />
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat Interface</title>
+    <link id="hljs-theme" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <link rel="stylesheet" href="static/styles.css">
+    <style>
+        /* Minimal essential styles not fully covered by styles.css or for overrides */
+        #loading-overlay {
+            position: fixed; inset: 0; background-color: rgba(0, 0, 0, 0.7);
+            display: flex; align-items: center; justify-content: center; z-index: 10000;
+        }
+        .spinner { /* General spinner style, can be used in buttons too */
+            border: 4px solid rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            border-top-color: var(--accent-primary, #3498db); /* For global overlay */
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        /* Spinner specifically for buttons (smaller, uses currentColor for border-top) */
+        button .spinner-button {
+            width: 1.2em; height: 1.2em; 
+            border-width: .18em; 
+            display: inline-block; 
+            margin-right: .5em; 
+            vertical-align: middle;
+            border-top-color: currentColor; /* Takes button text color */
+            border-right-color: transparent;
+            border-bottom-color: currentColor;
+            border-left-color: transparent;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .hidden { display: none !important; }
+
+        /* Dynamic Code Block Styling - uses CSS variables from styles.css */
+        .message-code-block-wrapper {
+            position: relative;
+            margin: 0.8em 0;
+            background-color: var(--code-bg);
+            border-radius: var(--border-radius);
+            box-shadow: var(--shadow);
+        }
+        .message-code-block-wrapper pre {
+            margin: 0;
+            padding: 1em;
+            padding-top: 3em !important; 
+            padding-bottom: 3em !important; 
+            overflow-x: auto;
+            font-family: 'Fira Code', Consolas, Monaco, 'Andale Mono', monospace;
+            font-size: 0.875em; 
+            line-height: 1.5;
+            color: var(--text-primary);
+        }
+         .copy-btn-top {
+            position: absolute;
+            top: 0.6em; right: 0.6em; padding: 0.3em 0.6em;
+            background-color: rgba(255, 255, 255, 0.05); 
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: calc(var(--border-radius) / 2); 
+            cursor: pointer; font-size: 0.75em;
+            opacity: 0.6; transition: opacity 0.2s, background-color 0.2s, color 0.2s;
+            z-index: 10;
+        }
+        .message-code-block-wrapper:hover .copy-btn-top { opacity: 1; }
+        .copy-btn-top:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+        }
+
+        .code-block-bottom-bar {
+            display: flex; justify-content: flex-end; align-items: center;
+            padding: 0.4em 0.8em;
+            background-color: rgba(0, 0, 0, 0.1); 
+            border-top: 1px solid var(--border-color);
+            position: absolute; bottom: 0; left: 0; right: 0;
+            border-bottom-left-radius: var(--border-radius);
+            border-bottom-right-radius: var(--border-radius);
+        }
+        .copy-btn-bottom {
+            padding: 0.3em 0.6em;
+            background-color: rgba(255, 255, 255, 0.05);
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: calc(var(--border-radius) / 2);
+            cursor: pointer; font-size: 0.75em;
+        }
+        .copy-btn-bottom:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+        }
+        
+        #fork-modal ul {
+            max-height: 300px; overflow-y: auto;
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius);
+            background-color: var(--bg-tertiary);
+        }
+        #fork-modal ul li {
+            padding: 10px 12px; cursor: pointer;
+            border-bottom: 1px solid var(--border-color);
+            transition: background-color 0.2s;
+            font-size: 0.9rem; color: var(--text-primary);
+        }
+        #fork-modal ul li:last-child { border-bottom: none; }
+        #fork-modal ul li:hover { background-color: var(--accent-secondary); color: white; }
+
+        .image-preview-item {
+            position: relative; width: 70px; height: 70px;
+            border-radius: var(--border-radius);
+            overflow: hidden; border: 1px solid var(--border-color);
+        }
+        .image-preview-item img { width: 100%; height: 100%; object-fit: cover; }
+        .remove-image-btn {
+            position: absolute; top: 2px; right: 2px;
+            background-color: rgba(231, 76, 60, 0.8); 
+            color: white; border: none; cursor: pointer;
+            font-size: 10px; width: 18px; height: 18px;
+            border-radius: 50%; display: flex; align-items: center; justify-content: center;
+            line-height: 1; opacity: 0.7; transition: opacity 0.2s;
+        }
+        .image-preview-item:hover .remove-image-btn { opacity: 1; }
+
+        /* Ensure all select elements in input-options have similar styling */
+        .input-options .model-select-container select {
+            background-color: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius);
+            padding: 8px 12px;
+            font-size: 0.9rem;
+            appearance: none; /* or -webkit-appearance, -moz-appearance for better cross-browser consistency if needed */
+            cursor: pointer;
+            min-width: 120px; /* Minimum width for better appearance */
+        }
+        .input-options .model-select-container select:focus {
+            outline: none;
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 1px var(--accent-primary);
+        }
+
+    </style>
 </head>
 <body>
-  <div class="app-container">
-    <!-- Sidebar -->
-    <aside class="sidebar" id="sidebar">
-      <div class="sidebar-header">
-        <span>Conversations</span>
-        <button id="new-chat-button" class="button-secondary">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-        </button>
-      </div>
-      <div id="conversation-list"></div>
-      <div id="not-signed-in-message" style="display: none;">
-        You are not signed in. Sign in to view and save your conversations.
-      </div>
-    </aside>
 
-    <!-- Main Header -->
-    <header class="header">
-      <div class="header-left">
-        <button id="toggle-sidebar-button">
-          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-        </button>
-        <h1>Internal LLM Chat</h1>
-      </div>
-      <div class="header-actions">
-        <div id="auth-buttons"></div>
-        <button id="export-chat-button" class="button-secondary" style="display: none;">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          Export
-        </button>
-      </div>
-    </header>
-
-    <!-- Chat Container -->
-    <div class="chat-container">
-      <div class="chat-window" id="chat-window"></div>
+    <div id="loading-overlay" class="hidden">
+        <div class="spinner"></div>
     </div>
 
-    <!-- Input Container -->
-    <div class="input-container">
-      <div class="input-options">
-        <div class="model-select-container" style="display: flex; gap: 20px;">
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <label for="model-select">Model:</label>
-            <select id="model-select"></select>
-          </div>
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <label for="backup-model-select">Backup Model:</label>
-            <select id="backup-model-select"></select>
-          </div>
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <label for="timeout-threshold">OpenAI Timeout Threshold:</label>
-            <input 
-              type="number" 
-              id="timeout-threshold" 
-              value="30" 
-              step="0.1"
-              min="0"
-              style="width:70px;"
-            />
-          </div>
-        </div>
-      </div>
-      
-      <!-- Image Preview Area -->
-      <div id="image-preview-container"></div>
-      
-      <div class="input-with-actions">
-        <div class="input-wrapper">
-          <textarea id="user-input" placeholder="Type your message..." rows="1"></textarea>
-        </div>
-        <button id="send-button">Send</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Auth Modals -->
-  <div id="signup-modal" class="modal">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h2>Create Account</h2>
-        <button class="close-modal" data-modal="signup-modal">&times;</button>
-      </div>
-      <div class="modal-body">
-        <form id="signup-form">
-          <div class="form-group">
-            <label for="signup-username">Username</label>
-            <input type="text" id="signup-username" class="form-control" required>
-          </div>
-          <div class="form-group">
-            <label for="signup-password">Password</label>
-            <input type="password" id="signup-password" class="form-control" required>
-          </div>
-          <button type="submit" class="button-primary" style="width: 100%;">Sign Up</button>
-        </form>
-      </div>
-    </div>
-  </div>
-
-  <div id="login-modal" class="modal">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h2>Sign In</h2>
-        <button class="close-modal" data-modal="login-modal">&times;</button>
-      </div>
-      <div class="modal-body">
-        <form id="login-form">
-          <div class="form-group">
-            <label for="login-username">Username</label>
-            <input type="text" id="login-username" class="form-control" required>
-          </div>
-          <div class="form-group">
-            <label for="login-password">Password</label>
-            <input type="password" id="login-password" class="form-control" required>
-          </div>
-          <button type="submit" class="button-primary" style="width: 100%;">Sign In</button>
-        </form>
-      </div>
-    </div>
-  </div>
-
-  <!-- Hidden file input for importing JSON -->
-  <input type="file" id="import-file-input" accept=".json" style="display:none;">
-  
-  <script>
-    // -----------------------------------------------------
-    // GLOBAL VARIABLES & STATE
-    // -----------------------------------------------------
-    const chatWindow = document.getElementById('chat-window');
-    const userInput = document.getElementById('user-input');
-    const sendButton = document.getElementById('send-button');
-    const modelSelect = document.getElementById('model-select');
-    const backupModelSelect = document.getElementById('backup-model-select');
-    const timeoutThresholdInput = document.getElementById('timeout-threshold');
-    const newChatButton = document.getElementById('new-chat-button');
-    const exportChatButton = document.getElementById('export-chat-button');
-    const importFileInput = document.getElementById('import-file-input');
-    const imagePreviewContainer = document.getElementById('image-preview-container');
-    const sidebar = document.getElementById('sidebar');
-    const toggleSidebarButton = document.getElementById('toggle-sidebar-button');
-
-    let conversation = [];
-    let currentModel = null;
-    let currentBackupModel = null;
-    let currentConversationId = null;
-    let leftoverLine = "";
-    let currentBotMessageGroup = null;
-    let currentBotMessageContainer = null;
-    let currentPartialTextElement = null;
-    let inCodeBlock = false;
-    let currentCodeElement = null;
-    let codeLines = [];
-    let currentCodeBlockContainer = null;
-    let thinkBlocks = [];
-    let currentThinkBlock = null;
-    let inThinkBlock = false;
-    let pastedImages = [];
-    let nextImageId = 0;
-    let activeAbortControllers = [];
-    let currentRequestController = null;
-    
-    // Code block detection patterns
-    const codeFencePatterns = [
-      /^```(?:([a-zA-Z0-9_+\-.]+))?$/,  // Triple backticks with optional language
-      /^~~~(?:([a-zA-Z0-9_+\-.]+))?$/,  // Triple tildes with optional language
-      /^-{3,}$/,                       // Three or more hyphens
-      /^={3,}$/,                       // Three or more equals signs
-      /^_{3,}$/                        // Three or more underscores
-    ];
-
-    // Common language name mappings for better syntax highlighting
-    const languageAliases = {
-      'js': 'javascript',
-      'ts': 'typescript',
-      'py': 'python',
-      'rb': 'ruby',
-      'sh': 'bash',
-      'c#': 'csharp',
-      'c++': 'cpp',
-      'html+php': 'php',
-      'md': 'markdown',
-      'rust': 'rust',
-      'go': 'go',
-      'cs': 'csharp',
-      'yml': 'yaml',
-      'json': 'json',
-      'jsx': 'jsx',
-      'tsx': 'tsx',
-      'css': 'css',
-      'sass': 'sass',
-      'scss': 'scss',
-      'sql': 'sql',
-      'shell': 'bash'
-    };
-
-    // -----------------------------------------------------
-    // ON LOAD: FETCH MODELS & INITIAL AUTH/SIDEBAR SETUP
-    // -----------------------------------------------------
-    window.onload = async function() {
-      await fetchAndPopulateOllamaModels();
-      await fetchAndPopulateOpenaiModels();
-      setPreferredModel();
-      updateAuthButtons();
-      fetchConversations();
-      
-      // Setup modal listeners
-      document.querySelectorAll('.close-modal').forEach(button => {
-        button.addEventListener('click', () => {
-          const modalId = button.dataset.modal;
-          document.getElementById(modalId).classList.remove('active');
-        });
-      });
-
-      // Make textarea auto-resize
-      userInput.addEventListener('input', function() {
-        this.style.height = 'auto';
-        this.style.height = (this.scrollHeight) + 'px';
-      });
-    };
-
-    // Whenever the main model changes, auto-adjust the timeout if it’s in the large-model list.
-    function handleModelChange() {
-      const selectedModel = modelSelect.value.trim();
-      const largeModels = ["o1", "o1-pro", "o1-pro-high"];
-      
-      // If the selected model starts with or equals any item in largeModels, set threshold=999
-      if (largeModels.some(m => selectedModel === m || selectedModel.startsWith(m))) {
-        timeoutThresholdInput.value = "999";
-      } else {
-        timeoutThresholdInput.value = "30"; // Can comment this out if the user wants to preserve their timeout threshold
-      }
-    }
-
-    // Attach change listener to main model select
-    modelSelect.addEventListener('change', handleModelChange);
-
-    // -----------------------------------------------------
-    // MODEL FETCH FUNCTIONS
-    // -----------------------------------------------------
-    async function fetchAndPopulateOllamaModels() {
-      try {
-        const response = await fetch('/ollama-models');
-        if (!response.ok) {
-          console.error('Failed to fetch Ollama models:', response.statusText);
-          return;
-        }
-        const data = await response.json();
-        if (data.models && Array.isArray(data.models)) {
-          data.models.forEach(model => {
-            // Primary model dropdown
-            const option = document.createElement('option');
-            option.value = model.NAME;
-            option.textContent = model.NAME;
-            option.setAttribute('data-source', 'ollama');
-            modelSelect.appendChild(option);
-            
-            // Backup model dropdown
-            const backupOption = document.createElement('option');
-            backupOption.value = model.NAME;
-            backupOption.textContent = model.NAME;
-            backupOption.setAttribute('data-source', 'ollama');
-            backupModelSelect.appendChild(backupOption);
-          });
-        } else {
-          console.error('Invalid Ollama models data:', data);
-        }
-      } catch (error) {
-        console.error('Error fetching Ollama models:', error);
-      }
-    }
-
-    async function fetchAndPopulateOpenaiModels() {
-      try {
-        const response = await fetch('/openai-models');
-        if (!response.ok) {
-          console.error('Failed to fetch OpenAI models:', response.statusText);
-          return;
-        }
-        const data = await response.json();
-        if (data.models && Array.isArray(data.models)) {
-          data.models.forEach(model => {
-            // Primary model dropdown
-            const option = document.createElement('option');
-            option.value = model.NAME;
-            option.textContent = model.NAME;
-            option.setAttribute('data-source', 'openai');
-            modelSelect.appendChild(option);
-            
-            // Backup model dropdown
-            const backupOption = document.createElement('option');
-            backupOption.value = model.NAME;
-            backupOption.textContent = model.NAME;
-            backupOption.setAttribute('data-source', 'openai');
-            backupModelSelect.appendChild(backupOption);
-          });
-        } else {
-          console.error('Invalid OpenAI models data:', data);
-        }
-      } catch (error) {
-        console.error('Error fetching OpenAI models:', error);
-      }
-    }
-
-    // -----------------------------------------------------
-    // Set Preferred Model Based on Priority Order
-    // -----------------------------------------------------
-    function setPreferredModel() {
-      const preferredModels = [
-        "o3-mini-high",
-        "qwen2.5-coder:32b",
-        "qwen2.5-coder:14b",
-        "qwen2.5-coder:7b",
-        "qwen2.5-coder:1.5b",
-        "llama3.2:latest"
-      ];
-      
-      const options = modelSelect.options;
-      let primaryModelIndex = -1;
-      
-      // Set primary model
-      for (const modelName of preferredModels) {
-        for (let i = 0; i < options.length; i++) {
-          if (options[i].value === modelName) {
-            modelSelect.selectedIndex = i;
-            currentModel = modelName;
-            primaryModelIndex = preferredModels.indexOf(modelName);
-            break;
-          }
-        }
-        if (primaryModelIndex !== -1) break;
-      }
-      
-      // Always set backup model to the last model in the preferredModels list
-      const backupModelName = preferredModels[preferredModels.length - 1];
-      for (let i = 0; i < backupModelSelect.options.length; i++) {
-        if (backupModelSelect.options[i].value === backupModelName) {
-          backupModelSelect.selectedIndex = i;
-          currentBackupModel = backupModelName;
-          break;
-        }
-      }
-      
-      // If the last model in preferredModels isn't available, use the first available model
-      if (!currentBackupModel && backupModelSelect.options.length > 0) {
-        backupModelSelect.selectedIndex = 0;
-        currentBackupModel = backupModelSelect.options[0].value;
-      }
-    }
-
-    // -----------------------------------------------------
-    // HELPER FUNCTIONS FOR CHAT
-    // -----------------------------------------------------
-    function scrollChatToBottom() {
-      chatWindow.scrollTop = chatWindow.scrollHeight;
-    }
-    
-    function scrollChatToBottomIfNeeded() {
-      const tolerance = 50;
-      const isNearBottom = chatWindow.scrollHeight - chatWindow.scrollTop - chatWindow.clientHeight <= tolerance;
-      if (isNearBottom) {
-        chatWindow.scrollTop = chatWindow.scrollHeight;
-      }
-    }
-    
-    function escapeHTML(str) {
-      return str
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-    }
-    
-    function formatTextWithMarkup(text) {
-      if (!text) return '';
-      
-      let escaped = escapeHTML(text);
-      
-      // Handle bold text with **
-      escaped = escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-      
-      // Handle italic text with *
-      escaped = escaped.replace(/\*([^\*]+)\*/g, '<em>$1</em>');
-      
-      // Handle inline code with `
-      escaped = escaped.replace(/`([^`]+)`/g, '<code>$1</code>');
-      
-      // Handle links [text](url)
-      escaped = escaped.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-      
-      // Convert line breaks to <br>
-      escaped = escaped.replace(/\n/g, '<br>');
-      
-      return escaped;
-    }
-
-    function detectLanguage(code, declaredLang) {
-      if (declaredLang) {
-        // Check if we have an alias for this language
-        return languageAliases[declaredLang.toLowerCase()] || declaredLang.toLowerCase();
-      }
-      
-      // Simple language detection heuristics
-      const firstLine = code.split('\n')[0].trim();
-      
-      // Python 
-      if (code.includes('def ') && code.includes(':') || 
-          code.includes('import ') && !code.includes(';') || 
-          firstLine.startsWith('#!/usr/bin/env python')) {
-        return 'python';
-      }
-      
-      // JavaScript
-      if (code.includes('function ') || 
-          code.includes('=>') || 
-          code.includes('const ') || 
-          code.includes('let ') ||
-          firstLine.includes('use strict')) {
-        if (code.includes('<jsx') || code.includes('React')) {
-          return 'jsx';
-        }
-        return 'javascript';
-      }
-      
-      // HTML
-      if (code.includes('<html') || 
-          code.includes('<!DOCTYPE') || 
-          (code.includes('<div') && code.includes('</div>'))) {
-        return 'html';
-      }
-      
-      // CSS
-      if (code.includes('{') && code.includes('}') && 
-          (code.includes('margin:') || code.includes('padding:') || code.includes('color:'))) {
-        return 'css';
-      }
-      
-      // SQL
-      if (code.toLowerCase().includes('select ') && 
-          (code.toLowerCase().includes(' from ') || code.toLowerCase().includes(' where '))) {
-        return 'sql';
-      }
-      
-      // JSON
-      if ((code.trim().startsWith('{') && code.trim().endsWith('}')) || 
-          (code.trim().startsWith('[') && code.trim().endsWith(']'))) {
-        try {
-          JSON.parse(code);
-          return 'json';
-        } catch (e) {
-          // Not valid JSON
-        }
-      }
-      
-      // Bash/Shell
-      if (firstLine.startsWith('#!/bin/') || 
-          (code.includes('echo ') && code.includes('$'))) {
-        return 'bash';
-      }
-      
-      // If we can't detect, default to plaintext
-      return '';
-    }
-
-    function createMessageGroup(sender) {
-      const group = document.createElement('div');
-      group.classList.add('message-group', sender);
-      
-      const avatar = document.createElement('div');
-      avatar.classList.add(sender === 'user' ? 'user-avatar' : 'bot-avatar');
-      avatar.textContent = sender === 'user' ? 'U' : 'AI';
-      
-      const messages = document.createElement('div');
-      messages.classList.add('messages');
-      
-      group.appendChild(avatar);
-      group.appendChild(messages);
-      chatWindow.appendChild(group);
-      
-      return { group, messages };
-    }
-
-    function appendUserMessage(content, images = []) {
-      const { group, messages } = createMessageGroup('user');
-      
-      const msg = document.createElement('div');
-      msg.classList.add('chat-message', 'user');
-      msg.innerHTML = formatTextWithMarkup(content);
-      messages.appendChild(msg);
-      
-      // Add images if any
-      if (images && images.length > 0) {
-        const imagesDiv = document.createElement('div');
-        imagesDiv.classList.add('user-images');
-        
-        images.forEach(base64Data => {
-          const imgEl = document.createElement('img');
-          imgEl.src = base64Data;
-          imagesDiv.appendChild(imgEl);
-        });
-        
-        messages.appendChild(imagesDiv);
-      }
-      
-      scrollChatToBottom();
-      return group;
-    }
-
-    function createBotMessageGroup() {
-      const { group, messages } = createMessageGroup('bot');
-      currentBotMessageGroup = group;
-      return messages;
-    }
-
-    function appendTextToBotMessage(messages, text) {
-      const msg = document.createElement('div');
-      msg.classList.add('chat-message', 'bot');
-      msg.innerHTML = formatTextWithMarkup(text);
-      messages.appendChild(msg);
-      currentBotMessageContainer = msg;
-      currentPartialTextElement = null;
-      scrollChatToBottomIfNeeded();
-      return msg;
-    }
-
-    function updatePartialText(text) {
-      if (!currentBotMessageContainer) return;
-      
-      if (currentPartialTextElement) {
-        currentPartialTextElement.innerHTML = formatTextWithMarkup(text);
-      } else {
-        const el = document.createElement('span');
-        el.innerHTML = formatTextWithMarkup(text);
-        currentBotMessageContainer.appendChild(el);
-        currentPartialTextElement = el;
-      }
-      
-      scrollChatToBottomIfNeeded();
-    }
-
-    // -----------------------------------------------------
-    // THINKING BLOCK FUNCTIONS
-    // -----------------------------------------------------
-    function startThinkBlock(messages) {
-      const thinkContainer = document.createElement('div');
-      thinkContainer.classList.add('bot-think');
-      
-      const indicator = document.createElement('div');
-      indicator.classList.add('thinking-indicator');
-      indicator.textContent = 'AI is thinking...';
-      
-      const contentDiv = document.createElement('div');
-      contentDiv.classList.add('think-content');
-      contentDiv.style.display = 'none';
-      
-      indicator.addEventListener('click', () => {
-        if (contentDiv.style.display === 'none') {
-          contentDiv.style.display = 'block';
-          indicator.textContent = 'Hide thinking';
-        } else {
-          contentDiv.style.display = 'none';
-          indicator.textContent = 'AI is thinking...';
-        }
-      });
-      
-      thinkContainer.appendChild(indicator);
-      thinkContainer.appendChild(contentDiv);
-      messages.appendChild(thinkContainer);
-      
-      scrollChatToBottomIfNeeded();
-      
-      const block = { indicator, contentDiv };
-      thinkBlocks.push(block);
-      currentThinkBlock = block;
-      
-      return thinkContainer;
-    }
-
-    function appendThinkText(text) {
-      if (!currentThinkBlock) return;
-      
-      const content = escapeHTML(text);
-      currentThinkBlock.contentDiv.innerHTML += content;
-      scrollChatToBottomIfNeeded();
-    }
-
-    function endThinkBlock() {
-        currentThinkBlock = null;
-        inThinkBlock = false;
-        currentBotMessageContainer = null; // Reset to start a new message bubble
-    }
-
-    // -----------------------------------------------------
-    // CODE BLOCK FUNCTIONS (with Prism.js)
-    // -----------------------------------------------------
-    function startCodeBlock(messages, declaredLang = null) {
-      const codeBlockDiv = document.createElement('div');
-      codeBlockDiv.classList.add('code-block');
-      
-      const headerDiv = document.createElement('div');
-      headerDiv.classList.add('code-header');
-      
-      const langTag = document.createElement('span');
-      langTag.classList.add('code-lang-tag');
-      langTag.textContent = declaredLang || 'plaintext';
-      
-      const copyBtn = document.createElement('button');
-      copyBtn.classList.add('copy-button');
-      copyBtn.innerHTML = `
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-        </svg>
-        Copy
-      `;
-      
-      headerDiv.appendChild(langTag);
-      headerDiv.appendChild(copyBtn);
-      
-      const preEl = document.createElement('pre');
-      const codeEl = document.createElement('code');
-      
-      if (declaredLang) {
-        const normalizedLang = languageAliases[declaredLang.toLowerCase()] || declaredLang.toLowerCase();
-        codeEl.classList.add(`language-${normalizedLang}`);
-      }
-      
-      preEl.appendChild(codeEl);
-      codeBlockDiv.appendChild(headerDiv);
-      codeBlockDiv.appendChild(preEl);
-      
-      messages.appendChild(codeBlockDiv);
-      
-      currentCodeBlockContainer = codeBlockDiv;
-      currentCodeElement = codeEl;
-      codeLines = [];
-      codeLines.lang = declaredLang;
-      
-      copyBtn.addEventListener('click', () => {
-        const text = codeEl.textContent;
-        navigator.clipboard.writeText(text).then(() => {
-          copyBtn.innerHTML = `
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="20 6 9 17 4 12"></polyline>
-            </svg>
-            Copied!
-          `;
-          setTimeout(() => {
-            copyBtn.innerHTML = `
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-              </svg>
-              Copy
-            `;
-          }, 1500);
-        });
-      });
-      
-      scrollChatToBottomIfNeeded();
-      return codeBlockDiv;
-    }
-
-    function appendCodeLine(line) {
-      // Check for language declaration at the first line
-      if (codeLines.length === 0 && !codeLines.lang) {
-        const langMatch = line.match(/^([a-zA-Z0-9_+\-.]+)\s*$/);
-        if (langMatch) {
-          const lang = langMatch[1].toLowerCase();
-          const normalizedLang = languageAliases[lang] || lang;
-          
-          codeLines.lang = normalizedLang;
-          if (currentCodeElement && currentCodeBlockContainer) {
-            currentCodeElement.classList.add(`language-${normalizedLang}`);
-            
-            // Update language tag in header
-            const langTag = currentCodeBlockContainer.querySelector('.code-lang-tag');
-            if (langTag) {
-              langTag.textContent = normalizedLang;
-            }
-          }
-          return; // Skip this line as it's just the language declaration
-        }
-      }
-      
-      codeLines.push(line);
-      if (currentCodeElement) {
-        currentCodeElement.textContent += line + '\n';
-        scrollChatToBottomIfNeeded();
-      }
-    }
-
-    function endCodeBlock() {
-      if (!currentCodeElement) return;
-      
-      // Trim leading/trailing blank lines
-      while (codeLines.length && codeLines[0].trim() === '') {
-          codeLines.shift();
-      }
-      while (codeLines.length && codeLines[codeLines.length - 1].trim() === '') {
-          codeLines.pop();
-      }
-      
-      // Determine minimal indentation
-      let minIndent = Infinity;
-      for (const ln of codeLines) {
-          if (ln.trim() === '') continue;
-          const match = ln.match(/^(\s+)/);
-          if (match) {
-              const indentCount = match[1].length;
-              if (indentCount < minIndent) { minIndent = indentCount; }
-          } else {
-              minIndent = 0;
-              break;
-          }
-      }
-      if (!Number.isFinite(minIndent)) { minIndent = 0; }
-      
-      // Rebuild code with indentation removed
-      const cleaned = codeLines.map(ln => ln.slice(minIndent)).join('\n');
-      currentCodeElement.textContent = cleaned;
-      
-      // Detect language if not already set
-      if (!codeLines.lang || codeLines.lang === 'plaintext') {
-          const detectedLang = detectLanguage(cleaned, null);
-          if (detectedLang) {
-              currentCodeElement.className = `language-${detectedLang}`;
-              const langTag = currentCodeBlockContainer.querySelector('.code-lang-tag');
-              if (langTag) {
-                  langTag.textContent = detectedLang;
-              }
-          }
-      }
-      
-      // Apply syntax highlighting
-      Prism.highlightElement(currentCodeElement);
-      
-      inCodeBlock = false;
-      currentCodeElement = null;
-      codeLines = [];
-      currentCodeBlockContainer = null;
-      currentPartialTextElement = null;
-      currentBotMessageContainer = null; // Reset to start a new message bubble
-      
-      scrollChatToBottomIfNeeded();
-  }
-
-    // -----------------------------------------------------
-    // PARSING STREAMED CHUNKS
-    // -----------------------------------------------------
-    function parseAndAppendChunk(messages, newText) {
-      if (inThinkBlock) {
-        const closeTag = "</think>";
-        const closeIdx = newText.indexOf(closeTag);
-        if (closeIdx === -1) {
-          appendThinkText(newText);
-          return;
-        } else {
-          const beforeClose = newText.slice(0, closeIdx);
-          appendThinkText(beforeClose);
-          endThinkBlock();
-          const remainder = newText.slice(closeIdx + closeTag.length);
-          if (remainder) {
-            parseAndAppendChunk(messages, remainder);
-          }
-          return;
-        }
-      }
-
-      let textToProcess = leftoverLine + newText;
-      leftoverLine = "";
-      const segments = textToProcess.split('\n');
-      
-      for (let i = 0; i < segments.length - 1; i++) {
-        processLine(messages, segments[i]);
-      }
-      
-      leftoverLine = segments[segments.length - 1];
-
-      if (!inCodeBlock && leftoverLine) {
-        const trimmedLeft = leftoverLine.trim();
-        
-        // Check if it's a fence start/end
-        let isFence = false;
-        for (const pattern of codeFencePatterns) {
-          if (pattern.test(trimmedLeft)) {
-            isFence = true;
-            break;
-          }
-        }
-        
-        // Check for thinking blocks
-        if (trimmedLeft === '<think>' || trimmedLeft === '</think>') {
-          isFence = true;
-        }
-        
-        if (isFence) {
-          updatePartialText("");
-        } else {
-          updatePartialText(leftoverLine);
-        }
-      }
-    }
-
-    function processLine(messages, line) {
-      const trimmed = line.trim();
-      
-      // Check for code fence start/end
-      let isFence = false;
-      let declaredLang = null;
-      
-      for (const pattern of codeFencePatterns) {
-        const match = trimmed.match(pattern);
-        if (match) {
-          isFence = true;
-          if (match[1]) { // Captured language name
-            declaredLang = match[1];
-          }
-          break;
-        }
-      }
-      
-      if (isFence) {
-        if (!inCodeBlock) {
-          inCodeBlock = true;
-          startCodeBlock(messages, declaredLang);
-        } else {
-          endCodeBlock();
-        }
-        return;
-      }
-      
-      // <think> block
-      if (trimmed === '<think>') {
-        inThinkBlock = true;
-        startThinkBlock(messages);
-        return;
-      }
-      if (trimmed === '</think>') {
-        endThinkBlock();
-        return;
-      }
-
-      // If in code block, append lines
-      if (inCodeBlock) {
-        appendCodeLine(line);
-      } else {
-        // Normal text - if we have meaningful content
-        if (line.trim().length > 0) {
-          // If we have leftover partial text, complete it first
-          if (currentPartialTextElement) {
-            currentPartialTextElement.innerHTML = formatTextWithMarkup(leftoverLine);
-            currentPartialTextElement = null;
-          }
-          
-          // Create a new message bubble if we don't have one
-          if (!currentBotMessageContainer) {
-            currentBotMessageContainer = appendTextToBotMessage(messages, line);
-          } else {
-            // We're in the middle of a message - do we need a line break?
-            const formattedLine = formatTextWithMarkup(line);
-            currentBotMessageContainer.innerHTML += '<br>' + formattedLine;
-          }
-        }
-      }
-    }
-    
-    // -----------------------------------------------------
-    // MULTIMODAL: IMAGE PASTE & PREVIEW HANDLING
-    // -----------------------------------------------------
-    userInput.addEventListener('paste', (event) => {
-      const items = event.clipboardData.items;
-      for (const item of items) {
-        if (item.type.indexOf("image") !== -1) {
-          const file = item.getAsFile();
-          const reader = new FileReader();
-          reader.onload = function(e) {
-            const base64Data = e.target.result;
-            const imageObj = { id: nextImageId++, data: base64Data };
-            pastedImages.push(imageObj);
-            addImagePreview(imageObj.data, imageObj.id);
-          };
-          reader.readAsDataURL(file);
-        }
-      }
-    });
-
-    function addImagePreview(base64Data, imageId) {
-      const previewDiv = document.createElement('div');
-      previewDiv.classList.add('image-preview');
-      previewDiv.dataset.imageId = imageId;
-
-      const imgEl = document.createElement('img');
-      imgEl.src = base64Data;
-
-      const removeBtn = document.createElement('button');
-      removeBtn.classList.add('remove-image');
-      removeBtn.innerHTML = '×';
-      removeBtn.addEventListener('click', () => {
-        removeImagePreview(imageId, previewDiv);
-      });
-
-      previewDiv.appendChild(imgEl);
-      previewDiv.appendChild(removeBtn);
-      imagePreviewContainer.appendChild(previewDiv);
-    }
-
-    function removeImagePreview(imageId, previewDiv) {
-      pastedImages = pastedImages.filter(img => img.id !== parseInt(imageId));
-      previewDiv.remove();
-    }
-
-    // -----------------------------------------------------
-    // EXPORT & IMPORT CONVERSATIONS
-    // -----------------------------------------------------
-    function exportConversation() {
-      const exportObj = {
-        model: currentModel || "",
-        backup_models: currentBackupModel || "",
-        messages: conversation
-      };
-      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportObj, null, 2));
-      const downloadAnchorNode = document.createElement('a');
-      downloadAnchorNode.setAttribute("href", dataStr);
-      downloadAnchorNode.setAttribute("download", "conversation.json");
-      document.body.appendChild(downloadAnchorNode);
-      downloadAnchorNode.click();
-      downloadAnchorNode.remove();
-    }
-    
-    exportChatButton.addEventListener('click', exportConversation);
-
-    function updateExportButtonVisibility() {
-      exportChatButton.style.display = conversation.length > 0 ? 'inline-flex' : 'none';
-    }
-
-    importFileInput.addEventListener('change', handleImportFile);
-
-    function handleImportFile(event) {
-      const file = event.target.files[0];
-      if (!file) return;
-      
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        try {
-          const importedData = JSON.parse(e.target.result);
-          
-          if (activeAbortControllers.length > 0) {
-            activeAbortControllers.forEach(controller => controller.abort());
-            activeAbortControllers = [];
-          }
-          
-          if (typeof importedData !== "object" || !Array.isArray(importedData.messages)) {
-            throw new Error("Imported JSON must have a 'messages' array.");
-          }
-          
-          // Validate messages
-          for (let i = 0; i < importedData.messages.length; i++) {
-            const msg = importedData.messages[i];
-            if (typeof msg !== "object" || !("role" in msg) || !("content" in msg)) {
-              throw new Error(`Invalid message at index ${i}: Missing role or content.`);
-            }
-            if (!["user","assistant"].includes(msg.role)) {
-              throw new Error(`Invalid role at index ${i}: ${msg.role}`);
-            }
-            if (typeof msg.content !== "string") {
-              throw new Error(`Invalid content at index ${i}. Must be string.`);
-            }
-            if ("images" in msg) {
-              if (!Array.isArray(msg.images) || !msg.images.every(item => typeof item === 'string')) {
-                throw new Error(`Invalid images array at index ${i}.`);
-              }
-            }
-          }
-          
-          if (typeof importedData.model === "string") {
-            setModelIfExists(importedData.model);
-          }
-          
-          conversation = importedData.messages;
-          renderConversationFromArray();
-          
-        } catch (ex) {
-          alert("Failed to import conversation: " + ex.message);
-          console.error(ex);
-        }
-      };
-      reader.readAsText(file);
-    }
-
-    function setModelIfExists(modelName) {
-      const opts = modelSelect.options;
-      for (let i = 0; i < opts.length; i++) {
-        if (opts[i].value === modelName) {
-          modelSelect.selectedIndex = i;
-          currentModel = modelName;
-          return;
-        }
-      }
-      // If not found, leave the current selection unchanged
-    }
-
-    function renderConversationFromArray() {
-      chatWindow.innerHTML = '';
-      resetState();
-      
-      // Group consecutive messages by the same role
-      let currentRole = null;
-      let messageContainer = null;
-      
-      conversation.forEach(msg => {
-        if (msg.role === 'user') {
-          // Create user message
-          appendUserMessage(msg.content, msg.images);
-          currentRole = 'user';
-        } else if (msg.role === 'assistant') {
-          // Create bot message container
-          const messages = createBotMessageGroup();
-          currentRole = 'assistant';
-          
-          // Process the bot message
-          inCodeBlock = false;
-          inThinkBlock = false;
-          
-          const lines = msg.content.split('\n');
-          let currentText = '';
-          
-          for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-            const trimmed = line.trim();
-            
-            // Check for code fence
-            let isFence = false;
-            let declaredLang = null;
-            
-            for (const pattern of codeFencePatterns) {
-              const match = trimmed.match(pattern);
-              if (match) {
-                isFence = true;
-                if (match[1]) { // Captured language name
-                  declaredLang = match[1];
-                }
-                break;
-              }
-            }
-            
-            // Handle think blocks
-            if (trimmed === '<think>') {
-              // If we have accumulated text, output it first
-              if (currentText) {
-                appendTextToBotMessage(messages, currentText);
-                currentText = '';
-              }
-              
-              // Start think block
-              inThinkBlock = true;
-              const thinkBlock = startThinkBlock(messages);
-              
-              // Collect thinking content until </think>
-              let thinkContent = '';
-              i++;
-              while (i < lines.length && lines[i].trim() !== '</think>') {
-                thinkContent += lines[i] + '\n';
-                i++;
-              }
-              
-              // Add to think block
-              thinkBlock.querySelector('.think-content').textContent = thinkContent;
-              continue;
-            }
-            
-            // Handle code blocks
-            if (isFence) {
-              // If we have accumulated text, output it first
-              if (currentText) {
-                appendTextToBotMessage(messages, currentText);
-                currentText = '';
-              }
-              
-              if (!inCodeBlock) {
-                // Start a code block
-                inCodeBlock = true;
-                const codeBlock = startCodeBlock(messages, declaredLang);
-                
-                // Collect code until closing fence
-                let codeContent = '';
-                i++;
-                let foundClosingFence = false;
-                
-                while (i < lines.length) {
-                  const codeLine = lines[i];
-                  let isClosingFence = false;
-                  
-                  // Check if this line is a closing fence
-                  for (const pattern of codeFencePatterns) {
-                    if (pattern.test(codeLine.trim())) {
-                      isClosingFence = true;
-                      break;
-                    }
-                  }
-                  
-                  if (isClosingFence) {
-                    foundClosingFence = true;
-                    break;
-                  }
-                  
-                  codeContent += codeLine + '\n';
-                  i++;
-                }
-                
-                // Add the code and apply highlighting
-                const codeEl = codeBlock.querySelector('code');
-                codeEl.textContent = codeContent;
-                
-                // Detect language if not specified
-                if (!declaredLang) {
-                  const detectedLang = detectLanguage(codeContent);
-                  if (detectedLang) {
-                    codeEl.className = `language-${detectedLang}`;
-                    const langTag = codeBlock.querySelector('.code-lang-tag');
-                    if (langTag) {
-                      langTag.textContent = detectedLang;
-                    }
-                  }
-                }
-                
-                // Apply syntax highlighting
-                Prism.highlightElement(codeEl);
-                
-                // Reset state
-                inCodeBlock = false;
-              }
-            } else {
-              // Regular text line
-              currentText += line + '\n';
-            }
-          }
-          
-          // Output any remaining text
-          if (currentText) {
-            appendTextToBotMessage(messages, currentText);
-          }
-        }
-      });
-      
-      scrollChatToBottom();
-      updateExportButtonVisibility();
-      currentModel = modelSelect.value;
-    }
-
-    function resetState() {
-      leftoverLine = "";
-      inCodeBlock = false;
-      codeLines = [];
-      currentBotMessageGroup = null;
-      currentBotMessageContainer = null;
-      currentPartialTextElement = null;
-      inThinkBlock = false;
-      currentThinkBlock = null;
-      userInput.value = '';
-      pastedImages = [];
-      imagePreviewContainer.innerHTML = '';
-      userInput.style.height = 'auto';
-    }
-
-    // -----------------------------------------------------
-    // SEND MESSAGE & STREAM RESPONSE
-    // -----------------------------------------------------
-    async function sendMessage() {
-      // Abort any active streams
-      if (activeAbortControllers.length > 0) {
-        activeAbortControllers.forEach(controller => controller.abort());
-        activeAbortControllers = [];
-        sendButton.textContent = 'Send';
-        sendButton.style.backgroundColor = 'var(--accent-primary)';
-      }
-
-      const message = userInput.value.trim();
-      if (!message && pastedImages.length === 0) return;
-
-      // User bubble
-      appendUserMessage(message, pastedImages.map(img => img.data));
-      
-      // Add message to conversation array
-      let userMessageObj = { role: 'user', content: message };
-      if (pastedImages.length > 0) {
-        userMessageObj.images = pastedImages.map(img => img.data);
-      }
-      conversation.push(userMessageObj);
-      updateExportButtonVisibility();
-      
-      // Get selected model
-      currentModel = modelSelect.value;
-      currentBackupModel = backupModelSelect.value;
-
-      // Prepare images for API
-      const imageDataArray = pastedImages.map(img => img.data);
-      
-      // Reset input and images
-      userInput.value = '';
-      userInput.style.height = 'auto';
-      pastedImages = [];
-      imagePreviewContainer.innerHTML = '';
-
-      // Create bot message group for response
-      const messages = createBotMessageGroup();
-      
-      // Reset state for new bot message
-      resetState();
-      scrollChatToBottom();
-
-      const controller = new AbortController();
-      activeAbortControllers.push(controller);
-      currentRequestController = controller;
-
-      sendButton.textContent = 'Stop';
-      sendButton.style.backgroundColor = 'var(--accent-danger)';
-
-      const token = localStorage.getItem('token');
-      const headers = { 'Content-Type': 'application/json' };
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-
-      try {
-        const response = await fetch('/chat-completion', {
-          method: 'POST',
-          headers: headers,
-          body: JSON.stringify({ 
-            model: currentModel, 
-            backup_models: currentBackupModel,
-            messages: conversation, 
-            stream: true,
-            image_b64: imageDataArray,
-            conversation_id: currentConversationId,
-            timeout_threshold: parseFloat(timeoutThresholdInput.value)
-          }),
-          signal: controller.signal
-        });
-
-        if (!response.ok) {
-          let errorMessage = 'An error occurred while processing your message';
-          try {
-            const errorJson = await response.json();
-            if (errorJson.detail) {
-              errorMessage = errorJson.detail;
-            }
-          } catch (jsonError) {
-            // Fallback to generic error
-          }
-          
-          const errorMsg = document.createElement('div');
-          errorMsg.classList.add('chat-message', 'bot');
-          errorMsg.style.backgroundColor = 'var(--accent-danger)';
-          errorMsg.textContent = errorMessage;
-          messages.appendChild(errorMsg);
-          return;
-        }
-
-        if (!response.body) {
-          throw new Error('No readable stream in response.');
-        }
-        
-        scrollChatToBottom();
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let botMessageFull = "";
-        let buffer = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          
-          const chunk = decoder.decode(value);
-          buffer += chunk;
-          
-          // Process complete JSON objects that end with newline
-          let newlineIndex;
-          while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
-            const line = buffer.substring(0, newlineIndex).trim();
-            buffer = buffer.substring(newlineIndex + 1);
-            
-            if (line) {
-              try {
-                const jsonObj = JSON.parse(line);
-                if (jsonObj && jsonObj.message !== undefined) {
-                  const messageContent = jsonObj.message;
-                  botMessageFull += messageContent;
-                  parseAndAppendChunk(messages, messageContent);
-                }
-              } catch (e) {
-                console.error('Error parsing JSON from stream:', e, 'Line:', line);
-                // If JSON parsing fails, treat the line as raw text
-                botMessageFull += line;
-                parseAndAppendChunk(messages, line);
-              }
-            }
-          }
-          
-          // yield control briefly
-          await new Promise(r => setTimeout(r, 0));
-        }
-
-        // Process any remaining text in the buffer
-        if (buffer.trim()) {
-          try {
-            const jsonObj = JSON.parse(buffer.trim());
-            if (jsonObj && jsonObj.message !== undefined) {
-              const messageContent = jsonObj.message;
-              botMessageFull += messageContent;
-              parseAndAppendChunk(messages, messageContent);
-            }
-          } catch (e) {
-            console.error('Error parsing final JSON from stream:', e);
-            // If JSON parsing fails, treat the buffer as raw text
-            botMessageFull += buffer;
-            parseAndAppendChunk(messages, buffer);
-          }
-        }
-
-        if (leftoverLine) {
-          if (currentPartialTextElement && currentPartialTextElement.parentNode) {
-            currentPartialTextElement.parentNode.removeChild(currentPartialTextElement);
-            currentPartialTextElement = null;
-          }
-          processLine(messages, leftoverLine);
-          leftoverLine = "";
-        }
-        
-        // Store final bot text in conversation
-        conversation.push({ role: 'assistant', content: botMessageFull });
-        updateExportButtonVisibility();
-
-        // If server returned a conversation ID, store it & refresh conversation list
-        const conversationId = response.headers.get('X-Conversation-ID');
-        if (conversationId) {
-          currentConversationId = conversationId;
-          fetchConversations(); // Refresh sidebar
-        }
-
-      } catch (err) {
-        if (err.name === 'AbortError') {
-          // Generation canceled
-        } else {
-          console.error('Error streaming:', err);
-          
-          const errorMsg = document.createElement('div');
-          errorMsg.classList.add('chat-message', 'bot');
-          errorMsg.style.backgroundColor = 'var(--accent-danger)';
-          errorMsg.textContent = 'Error: ' + err.message;
-          messages.appendChild(errorMsg);
-        }
-      } finally {
-        activeAbortControllers = activeAbortControllers.filter(c => c !== controller);
-        if (currentRequestController === controller) {
-          sendButton.textContent = 'Send';
-          sendButton.style.backgroundColor = 'var(--accent-primary)';
-        }
-      }
-    }
-
-    sendButton.addEventListener('click', sendMessage);
-    
-    userInput.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendMessage();
-      }
-    });
-
-    // When user clicks "New Chat", reset local conversation and re-fetch
-    newChatButton.addEventListener('click', () => {
-      conversation = [];
-      chatWindow.innerHTML = '';
-      resetState();
-      currentConversationId = null; // Reset ID
-
-      updateExportButtonVisibility();
-      fetchConversations(); // Refresh sidebar
-    });
-
-    // -----------------------------------------------------
-    // AUTHENTICATION FUNCTIONS & LOGIC
-    // -----------------------------------------------------
-    function showModal(modalId) {
-      document.getElementById(modalId).classList.add('active');
-    }
-    
-    function closeModal(modalId) {
-      document.getElementById(modalId).classList.remove('active');
-    }
-    
-    function updateAuthButtons() {
-      const authButtons = document.getElementById('auth-buttons');
-      const token = localStorage.getItem('token');
-      
-      if (token) {
-        try {
-          const payload = JSON.parse(atob(token.split('.')[1]));
-          const username = payload.username;
-          
-          authButtons.innerHTML = `
-            <div class="user-info">
-              <span>${username}</span>
-              <button class="button-secondary" onclick="logout()">Sign Out</button>
+    <div id="login-view" class="modal">
+        <div class="modal-content">
+            <div class="modal-header"><h2 id="auth-title">Login</h2></div>
+            <div class="modal-body">
+                <form id="login-form">
+                    <div class="form-group">
+                        <label for="login-username">Username</label>
+                        <input type="text" id="login-username" name="username" required class="form-control">
+                    </div>
+                    <div class="form-group">
+                        <label for="login-password">Password</label>
+                        <input type="password" id="login-password" name="password" required class="form-control">
+                    </div>
+                    <button type="submit" class="button-primary" style="width: 100%;">Login</button>
+                    <p id="login-error" style="color: var(--accent-danger); font-size: 0.9em; text-align: center; margin-top: 10px; min-height: 1.2em;"></p>
+                </form>
+                <form id="signup-form" class="hidden">
+                    <div class="form-group">
+                        <label for="signup-username">Username</label>
+                        <input type="text" id="signup-username" name="username" required class="form-control">
+                    </div>
+                    <div class="form-group">
+                        <label for="signup-password">Password</label>
+                        <input type="password" id="signup-password" name="password" required class="form-control">
+                    </div>
+                    <button type="submit" class="button-primary" style="background-color: var(--accent-success); width: 100%;">Sign Up</button>
+                    <p id="signup-message" style="color: var(--accent-success); font-size: 0.9em; text-align: center; margin-top: 10px; min-height: 1.2em;"></p>
+                    <p id="signup-error" style="color: var(--accent-danger); font-size: 0.9em; text-align: center; margin-top: 10px; min-height: 1.2em;"></p>
+                </form>
+                <p style="text-align: center; margin-top: 20px; font-size: 0.9em;">
+                    <span id="login-prompt">Don't have an account?</span>
+                    <span id="signup-prompt" class="hidden">Already have an account?</span>
+                    <button id="toggle-auth-form-button" style="background: none; border: none; color: var(--accent-primary); cursor: pointer; text-decoration: underline; font-size: 1em; padding:0;">Sign Up</button>
+                </p>
             </div>
-          `;
-        } catch (e) {
-          localStorage.removeItem('token');
-          updateAuthButtons();
-        }
-      } else {
-        authButtons.innerHTML = `
-          <button class="button-secondary" onclick="showModal('signup-modal')">Sign Up</button>
-          <button class="button-primary" onclick="showModal('login-modal')">Sign In</button>
-        `;
-      }
-    }
+        </div>
+        <!-- <button id="theme-toggle-auth" class="button-secondary" style="position: fixed; bottom: 20px; right: 20px; padding: 10px 12px;">Theme</button> -->
+    </div>
 
-    document.getElementById('signup-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const username = document.getElementById('signup-username').value;
-      const password = document.getElementById('signup-password').value;
-      
-      try {
-        const response = await fetch('/signup', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password }),
-        });
-        
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.detail || 'Signup failed');
-        }
-        
-        alert('Signup successful! Please sign in.');
-        closeModal('signup-modal');
-        showModal('login-modal');
-      } catch (error) {
-        alert(error.message);
-      }
-    });
+    <div id="chat-view" class="app-container hidden">
+        <aside id="sidebar" class="sidebar">
+            <div class="sidebar-header"><span>Conversations</span></div>
+            <ul id="conversations-list"></ul>
+            <div id="not-signed-in-message" class="hidden">Please sign in.</div>
+        </aside>
 
-    document.getElementById('login-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const username = document.getElementById('login-username').value;
-      const password = document.getElementById('login-password').value;
-      
-      try {
-        const response = await fetch('/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password }),
-        });
-        
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.detail || 'Login failed');
-        }
-        
-        const data = await response.json();
-        localStorage.setItem('token', data.token);
-        updateAuthButtons();
-        closeModal('login-modal');
-        fetchConversations(); // Refresh conversations after login
-      } catch (error) {
-        alert(error.message);
-      }
-    });
+        <header class="header">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <button id="sidebar-toggle" class="button-secondary" style="padding: 6px 10px; display: none;">☰</button>
+                <h1 id="conversation-title">New Chat</h1>
+            </div>
+            <div class="header-actions">
+                <button id="fork-conversation-btn" class="button-primary hidden" style="background-color: var(--accent-secondary);">Fork</button>
+                <button id="export-chat-btn" class="button-secondary hidden">Export</button>
+                <!-- <button id="new-chat-button" class="button-primary" style="background-color: var(--accent-success);">New Chat</button> -->
+                <a href="." id="new-chat-button" class="button-primary" style="background-color: var(--accent-success); text-decoration: none;">New Chat</a>
 
-    // Logout function
-    function logout() {
-      localStorage.removeItem('token');
-      updateAuthButtons();
-      document.getElementById('conversation-list').innerHTML = '';
-      document.getElementById('not-signed-in-message').style.display = 'block';
-      
-      // Reset current conversation state in the frontend
-      conversation = [];
-      chatWindow.innerHTML = '';
-      resetState();
-      currentConversationId = null;
-    }
+                <!-- <button id="theme-toggle-chat" class="button-secondary">Theme</button> -->
+                <button id="logout-button" class="button-primary" style="background-color: var(--accent-danger);">Logout</button>
+            </div>
+        </header>
 
-    // Make logout function global for onclick handlers
-    window.logout = logout;
-    window.showModal = showModal;
-    window.closeModal = closeModal;
+        <main class="chat-container">
+            <div id="chat-messages" class="chat-window"></div>
+        </main>
 
-    // -----------------------------------------------------
-    // SIDEBAR: TOGGLE & FETCHING CONVERSATIONS
-    // -----------------------------------------------------
-    toggleSidebarButton.addEventListener('click', () => {
-      sidebar.classList.toggle('open');
-      document.body.classList.toggle('sidebar-collapsed');
-    });
+        <div class="input-container">
+            <form id="chat-form">
+                <div id="image-previews" class="image-preview-container"></div>
+                <div class="input-options">
+                    <div class="model-select-container">
+                        <label for="model-select">Model:</label>
+                        <select id="model-select"></select>
+                        <label for="backup-model-select">Backup Model:</label>
+                        <select id="backup-model-select"></select>
+                    </div>
+                    <div style="display:flex; align-items: center; gap: 15px;">
+                        <div class="model-select-container">
+                          <label for="profile-select" style="margin-left:15px;"> Request Profile:</label>
+                          <select id="profile-select"><option value="">None</option></select>
+                        </div>
+                        <div style="display:flex; align-items: center;">
+                            <input type="checkbox" id="stream-toggle" style="margin-right: 5px; accent-color: var(--accent-primary); width:16px; height:16px;" checked>
+                            <label for="stream-toggle">Stream</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="input-with-actions">
+                    <div class="input-wrapper">
+                        <textarea id="user-input" placeholder="Type your message... (Shift+Enter for new line)"></textarea>
+                    </div>
+                    <button id="send-button" type="submit">Send</button>
+                    <label for="image-input" class="button-secondary" style="height: 56px; display:flex; align-items:center; padding: 0 15px; white-space: nowrap;">Attach Image</label>
+                    <input type="file" id="image-input" accept="image/*" multiple class="hidden">
+                </div>
+            </form>
+        </div>
+    </div>
 
-    async function fetchConversations() {
-      const token = localStorage.getItem('token');
-      if (!token) {
-        document.getElementById('not-signed-in-message').style.display = 'block';
-        document.getElementById('conversation-list').innerHTML = '';
-        return;
-      }
-      
-      document.getElementById('not-signed-in-message').style.display = 'none';
-      
-      try {
-        const response = await fetch('/conversations', {
-          headers: { 'Authorization': `Bearer ${token}` },
-        });
-        
-        if (!response.ok) {
-          if(response.status == 401) {
-            logout();
-            return
-          }
-          throw new Error('Failed to fetch conversations');
-        }
-        
-        const data = await response.json();
-        const conversationList = document.getElementById('conversation-list');
-        conversationList.innerHTML = '';
-        
-        if (data.conversations.length === 0) {
-          const emptyState = document.createElement('div');
-          emptyState.classList.add('empty-state');
-          emptyState.textContent = 'No saved conversations yet.';
-          conversationList.appendChild(emptyState);
-          return;
-        }
-        
-        data.conversations.forEach(conv => {
-          const div = document.createElement('div');
-          div.classList.add('conversation-preview');
-          div.innerHTML = `
-            <p>${conv.preview || 'Untitled conversation'}</p>
-            <small>${new Date(conv.updated_at).toLocaleString()}</small>
-          `;
-          div.addEventListener('click', () => loadConversation(conv.conversation_id));
-          conversationList.appendChild(div);
-        });
-      } catch (error) {
-        console.error('Error fetching conversations:', error);
-      }
-    }
+    <div id="fork-modal" class="modal">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3>Fork Conversation</h3>
+                <button id="cancel-fork-btn" class="close-modal">×</button>
+            </div>
+            <div class="modal-body">
+                <p style="color: var(--text-secondary); margin-bottom: 15px; font-size: 0.9em;">Select the last message to include in the new forked conversation.</p>
+                <ul id="fork-message-list"></ul>
+            </div>
+        </div>
+    </div>
 
-    async function loadConversation(conversationId) {
-      const token = localStorage.getItem('token');
-      if (!token) return;
-      
-      try {
-        const response = await fetch(`/conversations/${conversationId}`, {
-          headers: { 'Authorization': `Bearer ${token}` },
-        });
-        
-        if (!response.ok) {
-          throw new Error('Failed to load conversation');
-        }
-        
-        const data = await response.json();
-        
-        // Update currentConversationId immediately
-        currentConversationId = conversationId;
-        
-        // If the server returns data.model, update the model dropdown
-        if (typeof data.model === "string") {
-          setModelIfExists(data.model);
-        }
-        
-        conversation = data.messages;
-        renderConversationFromArray();
-        
-        // Close the sidebar on mobile after selection
-        if (window.innerWidth <= 768) {
-          sidebar.classList.remove('open');
-        }
-      } catch (error) {
-        console.error('Error loading conversation:', error);
-      }
-    }
-
-    // Initial setup
-    if (window.innerWidth <= 768) {
-      document.body.classList.add('sidebar-collapsed');
-    } else {
-      sidebar.classList.add('open');
-    }
-  </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    
+    <script type="module" src="static/js/main.js"></script>
 </body>
 </html>
