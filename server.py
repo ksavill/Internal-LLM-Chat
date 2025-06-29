@@ -574,22 +574,41 @@ def _to_openai_multimodal_format(messages_dicts: List[Dict]) -> List[Dict[str, A
     In OpenAI's format, content is a string for text-only messages, or a list of 
     parts (text and image_url) for multimodal messages.
     """
+
     processed_messages: List[Dict[str, Any]] = []
+
     for msg_dict in messages_dicts:
-        role = msg_dict["role"]
-        text_content = msg_dict.get("content", "") 
-        image_data_urls = msg_dict.get("images") # List of data URLs "data:image/...;base64,..."
+        # Shallow-copy so that we do not mutate the caller's data and so that any
+        # extra keys not explicitly handled here are preserved (for example
+        # `name`, `tool_call_id`, etc.).
+        msg_out: Dict[str, Any] = dict(msg_dict)
+
+        image_data_urls = msg_dict.get("images")
+        text_content = msg_dict.get("content", "")
 
         if image_data_urls and isinstance(image_data_urls, list):
-            openai_content_parts: List[Dict[str, Any]] = [{"type": "text", "text": text_content}]
+            openai_content_parts: List[Dict[str, Any]] = []
+
+            # Always include the textual component first (even if empty) so that
+            # the ordering of parts mirrors common usage.
+            openai_content_parts.append({"type": "text", "text": text_content})
+
             for data_url in image_data_urls:
                 if isinstance(data_url, str) and data_url.startswith("data:image"):
-                    openai_content_parts.append({"type": "image_url", "image_url": {"url": data_url}})
+                    openai_content_parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": data_url},
+                    })
                 else:
-                    logger.warning(f"Skipping invalid image data URL: {str(data_url)[:50]}") # Log and skip malformed
-            processed_messages.append({"role": role, "content": openai_content_parts})
-        else: # No images or invalid image format, content is just text
-            processed_messages.append({"role": role, "content": text_content})
+                    logger.warning(
+                        f"Skipping invalid image data URL: {str(data_url)[:50]}"
+                    )
+
+            msg_out["content"] = openai_content_parts
+            msg_out.pop("images", None)
+
+        processed_messages.append(msg_out)
+
     return processed_messages
 
 
@@ -711,6 +730,11 @@ async def chat_completion(
                 for i, model_name_to_try in enumerate(models_to_try):
                     interface = await get_interface(request.app, model_name_to_try)
                     local_kwargs = {"timeout_threshold": chat_req.timeout_threshold}
+                    # Forward tool definitions to the underlying interface when
+                    # supplied.  The various interface implementations will
+                    # decide how (or whether) to use this information.
+                    if chat_req.tools:
+                        local_kwargs["tools"] = chat_req.tools
                     if isinstance(interface, OpenAIInterface) and interface._uses_responses_api(): # type: ignore
                         local_kwargs["previous_response_id"] = previous_response_id
                     try:
@@ -728,12 +752,9 @@ async def chat_completion(
                         selected_interface = interface 
                         backup_used = i > 0
                         
-                        # Process first chunk's content
-                        first_content = interface.extract_content_from_chunk(first_chunk)
-                        if first_content:
-                            full_response_chunks.append(first_content)
-                        
-                        logger.info(f"Streaming started with model {model_name_to_try}; backup_used={backup_used}")
+                        logger.info(
+                            f"Streaming started with model {model_name_to_try}; backup_used={backup_used}"
+                        )
                         break 
                     except Exception as e:
                         logger.warning(f"Model {model_name_to_try} failed streaming initialization: {e}")
@@ -746,31 +767,59 @@ async def chat_completion(
                     raise HTTPException(status_code=500, detail="All models failed to start streaming")
 
                 async def streamer() -> AsyncGenerator[bytes, None]:
+                    """Generator that streams NDJSON bytes back to the caller.
+
+                    When the caller supplied the optional `tools` parameter we want
+                    to preserve the full structure of every chunk emitted by the
+                    upstream provider so that the client can correctly interpret
+                    tool calls.  In that scenario we simply serialise each chunk
+                    verbatim.
+
+                    If no tools are in use we retain the original behaviour of
+                    streaming only the assistant message content so that the
+                    existing front-end continues to function exactly as before.
+                    """
+
                     logger.info("Starting streaming response")
-                    # Yield the first chunk's content if already processed
-                    if full_response_chunks and full_response_chunks[0]:
-                         yield (json.dumps({"message": full_response_chunks[0]}) + "\n").encode("utf-8")
-                    
+
+                    # Helper to serialise a dictionary as NDJSON bytes.
+                    def _json_bytes(obj: Dict[str, Any]) -> bytes:  # type: ignore[type-var]
+                        return (json.dumps(obj) + "\n").encode("utf-8")
+
+                    # Firstly yield the first chunk that we already pulled above.
+                    if chat_req.tools:
+                        yield _json_bytes(first_chunk)  # type: ignore[arg-type]
+                    else:
+                        first_content = selected_interface.extract_content_from_chunk(first_chunk)  # type: ignore
+                        if first_content:
+                            full_response_chunks.append(first_content)
+                            yield _json_bytes({"message": first_content})
+
+                    # Now continue with the remainder of the stream.
                     try:
-                        async for chunk in selected_stream_gen: # type: ignore
-                            # Error checking for subsequent chunks (adapt as needed)
+                        async for chunk in selected_stream_gen:  # type: ignore
+                            # Surface errors as-is.
                             if isinstance(chunk, dict) and "error" in chunk:
                                 logger.error(f"Error in streaming chunk: {chunk['error']}")
-                                # Optionally, yield an error message to client and stop
-                                yield (json.dumps({"error": chunk['error']}) + "\n").encode("utf-8")
-                                break 
-                            
-                            content_from_chunk = selected_interface.extract_content_from_chunk(chunk) # type: ignore
-                            if content_from_chunk:
-                                full_response_chunks.append(content_from_chunk)
-                                yield (json.dumps({"message": content_from_chunk}) + "\n").encode("utf-8")
+                                yield _json_bytes({"error": chunk["error"]})
+                                break
+
+                            if chat_req.tools:
+                                # Forward full chunk to client.
+                                yield _json_bytes(chunk)
+                            else:
+                                content_from_chunk = selected_interface.extract_content_from_chunk(chunk)  # type: ignore
+                                if content_from_chunk:
+                                    full_response_chunks.append(content_from_chunk)
+                                    yield _json_bytes({"message": content_from_chunk})
                     except Exception as e:
-                        logger.error(f"Error during streaming with model {selected_interface.model}: {e}") # type: ignore
-                        # Optionally, yield an error message to client
-                        yield (json.dumps({"error": f"Streaming error: {e}"}) + "\n").encode("utf-8")
+                        logger.error(
+                            f"Error during streaming with model {selected_interface.model}: {e}"
+                        )  # type: ignore
+                        yield _json_bytes({"error": f"Streaming error: {e}"})
                     finally:
-                        if hasattr(selected_stream_gen, 'aclose'):
-                           await selected_stream_gen.aclose() # type: ignore
+                        if hasattr(selected_stream_gen, "aclose"):
+                           await selected_stream_gen.aclose()  # type: ignore
                         logger.info("Streaming response completed")
 
                 async def save_streamed_response_task():
@@ -802,9 +851,11 @@ async def chat_completion(
                     await loop.run_in_executor(db_pool, _save_in_thread)
                     logger.info(f"Streamed response saved for conversation {conversation_id}")
 
-                if conversation_id:
+                if conversation_id and not chat_req.tools:
                     background_tasks.add_task(save_streamed_response_task)
-                    logger.info(f"Registered background task to save streamed response for {conversation_id}")
+                    logger.info(
+                        f"Registered background task to save streamed response for {conversation_id}"
+                    )
                 
                 return StreamingResponse(
                     streamer(),
@@ -815,12 +866,15 @@ async def chat_completion(
             else: # Non-streaming
                 logger.info("Processing non-streaming chat request")
                 final_content_str: Optional[str] = None
+                raw_response_obj: Optional[Dict[str, Any]] = None  # For tool calling
                 backup_used = False
                 selected_interface = None
 
                 for i, model_name_to_try in enumerate(models_to_try):
                     interface = await get_interface(request.app, model_name_to_try)
                     local_kwargs = {}
+                    if chat_req.tools:
+                        local_kwargs["tools"] = chat_req.tools
                     if isinstance(interface, OpenAIInterface) and interface._uses_responses_api(): # type: ignore
                         local_kwargs["previous_response_id"] = previous_response_id
                     try:
@@ -832,24 +886,50 @@ async def chat_completion(
                         if isinstance(response_data, dict) and "error" in response_data:
                             raise RuntimeError(f"Model error: {response_data['error']}")
                         
-                        extracted_content = interface.extract_content_from_response(response_data, is_chat=True)
-                        if extracted_content is not None: # Allow empty string response
-                            final_content_str = extracted_content
+                        if chat_req.tools:
+                            # When tools are supplied we forward the entire response
+                            # object to the caller so that they have access to
+                            # tool call data.
+                            raw_response_obj = response_data
                             selected_interface = interface
                             backup_used = i > 0
-                            logger.info(f"Non-streaming response from {model_name_to_try} received.")
+                            logger.info(
+                                f"Non-streaming tool-call response from {model_name_to_try} received."
+                            )
                             break
-                        else: # Should not happen if no error, but good to log
-                            logger.warning(f"Model {model_name_to_try} returned no content and no error.")
+                        else:
+                            extracted_content = interface.extract_content_from_response(
+                                response_data, is_chat=True
+                            )
+
+                            if extracted_content is not None:
+                                final_content_str = extracted_content
+                                selected_interface = interface
+                                backup_used = i > 0
+                                logger.info(
+                                    f"Non-streaming response from {model_name_to_try} received."
+                                )
+                                break
+                            else:
+                                # No content extracted (and no explicit error). Log for diagnostics.
+                                logger.warning(
+                                    f"Model {model_name_to_try} returned no content and no error."
+                                )
                             
                     except Exception as e:
                         logger.warning(f"Model {model_name_to_try} failed non-streaming request: {e}")
                 
-                if final_content_str is None: # Check if any model succeeded
+                # Ensure at least one model succeeded.
+                if (not chat_req.tools and final_content_str is None) or (
+                    chat_req.tools and raw_response_obj is None
+                ):
                     logger.error("All models failed non-streaming request")
-                    raise HTTPException(status_code=500, detail="All models failed to generate a response")
+                    raise HTTPException(
+                        status_code=500,
+                        detail="All models failed to generate a response",
+                    )
 
-                if conversation_id:
+                if conversation_id and not chat_req.tools:
                     async def save_non_streamed_response_task():
                         def _save_in_thread():
                             # combined_for_model_pydantic already has all user messages.
@@ -874,10 +954,16 @@ async def chat_completion(
                     background_tasks.add_task(save_non_streamed_response_task)
                     logger.info(f"Registered background task to save non-streaming response for {conversation_id}")
 
-                return JSONResponse(
-                    {"message": final_content_str},
-                    headers={"X-Conversation-ID": conversation_id} if conversation_id else {}
-                )
+                if chat_req.tools:
+                    return JSONResponse(
+                        raw_response_obj,
+                        headers={"X-Conversation-ID": conversation_id} if conversation_id else {},
+                    )
+                else:
+                    return JSONResponse(
+                        {"message": final_content_str},
+                        headers={"X-Conversation-ID": conversation_id} if conversation_id else {},
+                    )
 
         except HTTPException: # Re-raise HTTPExceptions directly
             raise

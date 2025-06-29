@@ -72,6 +72,8 @@ body {
 .header-actions {
     display: flex;
     gap: 12px;
+    /* Allow the buttons to flow onto a new line if there isn't enough horizontal space */
+    flex-wrap: wrap;
 }
 
 .user-info {
@@ -148,7 +150,7 @@ body {
     display: none;
 }
 
-#toggle-sidebar-button {
+#sidebar-toggle {
     background: none;
     border: none;
     color: var(--text-primary);
@@ -675,7 +677,7 @@ button {
     left: 0;
     }
 
-    #toggle-sidebar-button {
+    #sidebar-toggle {
     position: fixed;
     bottom: 24px;
     right: 24px;
@@ -693,5 +695,97 @@ button {
 
     .message-group {
     max-width: 95%;
+    }
+}
+
+/* ------------------------------------------------------------------
+   Additional responsiveness for tablet / small-desktop breakpoints
+   ------------------------------------------------------------------ */
+@media (max-width: 1024px) {
+    /* Header tweaks */
+    .header {
+        flex-wrap: wrap;
+        gap: 12px;
+    }
+    .header-actions {
+        width: 100%;
+        justify-content: flex-start;
+        gap: 8px;
+    }
+
+    /* Make header buttons a little more compact */
+    .header-actions .button-primary,
+    .header-actions .button-secondary {
+        padding: 6px 12px;
+        font-size: 0.8rem;
+    }
+
+    /* Options bar above the textarea */
+    .input-options {
+        flex-wrap: wrap;
+        gap: 12px;
+    }
+
+    .input-options > * {
+        flex: 1 1 100%;
+    }
+
+    /* Model / profile select boxes should shrink gracefully */
+    .input-options select {
+        min-width: 0;
+    }
+
+    /* Textarea row */
+    .input-with-actions {
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+}
+
+/* ------------------------------------------------------------------
+   Phone-sized (< 600px) layout adjustments
+   ------------------------------------------------------------------ */
+@media (max-width: 600px) {
+    /* Stack header title and actions */
+    .header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .header h1 {
+        font-size: 1.2rem;
+    }
+
+    .header-actions {
+        justify-content: space-between;
+    }
+
+    /* Stack the textarea actions vertically */
+    .input-with-actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    #send-button,
+    .input-with-actions label[for="image-input"] {
+        width: 100%;
+    }
+
+    /* Ensure sidebar toggle is always visible */
+    #sidebar-toggle {
+        display: flex !important;
+    }
+
+    /* Text area should grow to take available width */
+    #user-input {
+        min-height: 100px;
+    }
+
+    /* Reduce avatar size */
+    .user-avatar,
+    .bot-avatar {
+        width: 28px;
+        height: 28px;
+        font-size: 0.9rem;
     }
 }

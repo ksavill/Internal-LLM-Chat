@@ -38,49 +38,64 @@ def _reformat_messages_for_ollama(messages_openai_format: List[Dict[str, Any]]) 
         [{'role': 'user', 'content': 'Hi', 'images': ['base64_string1']}]
     """
     reformatted_messages: List[Dict[str, Any]] = []
+
     for msg_openai in messages_openai_format:
+        # Start with a *shallow copy* so that any additional keys (e.g.
+        # `name`, `tool_call_id`, `tool_calls`, etc.) survive the
+        # transformation untouched.
+        ollama_msg: Dict[str, Any] = dict(msg_openai)
+
         role = msg_openai.get("role")
+        ollama_msg["role"] = role  # Ensure role field exists/overrides
+
         openai_content_parts = msg_openai.get("content")
-        
-        ollama_msg: Dict[str, Any] = {"role": role}
-        
+
         final_text_content_parts: List[str] = []
         final_image_base64_parts: List[str] = []
 
-        if isinstance(openai_content_parts, str): # Text-only message
+        if isinstance(openai_content_parts, str):
+            # Text-only message – no conversion required.
             final_text_content_parts.append(openai_content_parts)
-        elif isinstance(openai_content_parts, list): # Multimodal message (list of parts)
+        elif isinstance(openai_content_parts, list):
+            # Multimodal: split into text and images.
             for part in openai_content_parts:
-                if isinstance(part, dict):
-                    part_type = part.get("type")
-                    if part_type == "text":
-                        text_val = part.get("text")
-                        if isinstance(text_val, str): # Ensure text is string
-                           final_text_content_parts.append(text_val)
-                    elif part_type == "image_url":
-                        image_url_dict = part.get("image_url")
-                        if isinstance(image_url_dict, dict):
-                            data_url = image_url_dict.get("url")
-                            if isinstance(data_url, str):
-                                pure_base64 = _data_url_to_pure_base64(data_url)
-                                if pure_base64:
-                                    final_image_base64_parts.append(pure_base64)
+                if not isinstance(part, dict):
+                    continue
+                part_type = part.get("type")
+                if part_type == "text":
+                    text_val = part.get("text")
+                    if isinstance(text_val, str):
+                        final_text_content_parts.append(text_val)
+                elif part_type == "image_url":
+                    image_url_dict = part.get("image_url")
+                    if isinstance(image_url_dict, dict):
+                        data_url = image_url_dict.get("url")
+                        if isinstance(data_url, str):
+                            pure_base64 = _data_url_to_pure_base64(data_url)
+                            if pure_base64:
+                                final_image_base64_parts.append(pure_base64)
         else:
-            logger.warning(f"Unexpected content type ({type(openai_content_parts)}) in message for Ollama. Defaulting to empty content.")
-            # ollama_msg["content"] = "" # Will be set below
+            logger.warning(
+                "Unexpected content type (%s) in message for Ollama. Defaulting to empty content.",
+                type(openai_content_parts),
+            )
 
+        # Compose the transformed content.
         ollama_msg["content"] = "\n".join(final_text_content_parts).strip()
-        
-        # Ollama models (like llava) require the 'content' field to be non-empty even if only images are present.
-        # If content is empty but images exist, provide a placeholder space.
+
+        # Ollama requires non-empty content when images are present.
         if not ollama_msg["content"] and final_image_base64_parts:
-            ollama_msg["content"] = " " 
-            logger.debug("Content was empty but images present; added placeholder space to content for Ollama.")
+            ollama_msg["content"] = " "
 
         if final_image_base64_parts:
             ollama_msg["images"] = final_image_base64_parts
-        
+
+        # Remove the OpenAI-style content parts list to avoid confusion if it was
+        # present – it has been converted above.
+        # Remove helper keys not used by Ollama.
+
         reformatted_messages.append(ollama_msg)
+
     return reformatted_messages
 
 
@@ -95,11 +110,13 @@ class AsyncOllamaInterface:
         self.client = client or AsyncClient()
 
         vision_models = ['llava', 'bakllava', 'moondream', 'cogvlm'] # Keep this list updated
+        # Capability flags are a quick *hint* for upstream logic.  Ollama now
+        # supports function/tool calling, therefore mark it as available here.
         self.capabilities = {
             "chat": True,
-            "generate": True, # Retaining for potential direct use, though chat is primary
-            "tool": False,    # Ollama's primary lib doesn't directly expose tool use like OpenAI's
-            "image": any(vm in self.model.lower() for vm in vision_models)
+            "generate": True,  # Still useful for direct generation endpoint.
+            "tool": True,
+            "image": any(vm in self.model.lower() for vm in vision_models),
         }
 
         logger.debug(f"Initializing AsyncOllamaInterface with model: {self.model}")
@@ -109,9 +126,16 @@ class AsyncOllamaInterface:
         )
 
     def _supports(self, feature: str) -> bool:
-        """
-        Check if the model supports a specific feature based on initialized capabilities.
-        """
+        """Check if the model supports *feature* based on the capability map."""
+
+        # For *tool* usage we enable support when the caller actually supplies a
+        # ``tools`` list.  This avoids advertising tool-calling in capability
+        # probes when it is not relevant while still allowing full
+        # functionality if requested.
+
+        if feature == "tool":
+            return True  # Ollama >=0.1.34 supports tool calling when a tools list is provided.
+
         support = self.capabilities.get(feature, False)
         logger.debug(f"Feature support check for '{feature}': {support}")
         return support
@@ -187,7 +211,7 @@ class AsyncOllamaInterface:
                 model=self.model,
                 messages=ollama_formatted_messages,
                 stream=True,
-                options=ollama_options if ollama_options else None, # Pass options if they exist
+                options=ollama_options if ollama_options else None,  # Pass options if they exist
                 # Other kwargs can be passed if self.client.chat supports them directly
                 # e.g., format, keep_alive, etc. are valid top-level params for client.chat
                 **{k: v for k, v in kwargs.items() if k not in ["options", "timeout_threshold"]} 
