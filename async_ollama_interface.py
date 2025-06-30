@@ -43,7 +43,38 @@ def _reformat_messages_for_ollama(messages_openai_format: List[Dict[str, Any]]) 
         # Start with a *shallow copy* so that any additional keys (e.g.
         # `name`, `tool_call_id`, `tool_calls`, etc.) survive the
         # transformation untouched.
-        ollama_msg: Dict[str, Any] = dict(msg_openai)
+        ollama_msg: Dict[str, Any] = dict(msg_openai)  # shallow copy first
+
+        # ------------------------------------------------------------------
+        # 1) Tool-call argument normalisation (OpenAI → Ollama)
+        #    Ollama expects ``function.arguments`` **as a dict** whereas the
+        #    OpenAI-spec we send back to the client uses a *string* that
+        #    contains JSON.  When we forward previous conversation history
+        #    (which now contains that string form) we must convert it back to
+        #    a real dict so the underlying Pydantic validation inside
+        #    `ollama-python` accepts the message.
+        # ------------------------------------------------------------------
+
+        try:
+            tool_calls = ollama_msg.get("tool_calls")
+            if isinstance(tool_calls, list):
+                import json as _json
+                for tc in tool_calls:
+                    if not isinstance(tc, dict):
+                        continue
+                    func = tc.get("function")
+                    if isinstance(func, dict):
+                        args_val = func.get("arguments")
+                        if isinstance(args_val, str):
+                            try:
+                                func["arguments"] = _json.loads(args_val)
+                            except Exception:
+                                # If parsing fails leave as original string –
+                                # Ollama will raise a clear error and caller
+                                # can examine.
+                                pass
+        except Exception as _exc:
+            logger.debug("Failed to normalise tool_call arguments for Ollama: %s", _exc)
 
         role = msg_openai.get("role")
         ollama_msg["role"] = role  # Ensure role field exists/overrides
