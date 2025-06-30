@@ -154,8 +154,10 @@ export function renderMessage(message, chatMessagesElement, isUserMessage) {
     const contentWrapper = document.createElement('div');
     if (message.content) {
         if (typeof marked !== 'undefined') {
-            contentWrapper.innerHTML = marked.parse(message.content || '');
+            const transformed = transformThinkBlocks(message.content || '');
+            contentWrapper.innerHTML = marked.parse(transformed);
             processAndAddCodeBlockFunctionality(contentWrapper);
+            processThinkBlocks(contentWrapper);
         } else {
             const p = document.createElement('p'); p.textContent = message.content || ''; contentWrapper.appendChild(p);
         }
@@ -204,8 +206,10 @@ export function updateStreamingMessage(fullMessageContent, chatMessagesElement) 
         }
     }
     if (typeof marked !== 'undefined') {
-        contentWrapper.innerHTML = marked.parse(fullMessageContent);
+        const transformed = transformThinkBlocks(fullMessageContent);
+        contentWrapper.innerHTML = marked.parse(transformed);
         processAndAddCodeBlockFunctionality(contentWrapper);
+        processThinkBlocks(contentWrapper);
     } else { contentWrapper.textContent = fullMessageContent; }
     chatMessagesElement.scrollTop = chatMessagesElement.scrollHeight;
 }
@@ -430,4 +434,51 @@ export function handleImagePreviews(imageInputElement, imagePreviewsContainer) {
     };
 
     return { getFiles: () => currentFiles, clear: clearPreviewsAndFiles, addFiles: addFilesProgrammatically };
+}
+
+// -----------------------------------------------
+// THINKING BLOCK HANDLING
+// -----------------------------------------------
+
+// Simple HTML escape helper (minimal – sufficient for our text needs)
+function escapeHTML(str) {
+    return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+// Replace <think>…</think> ranges with a placeholder HTML structure that we can
+// later post-process for interactivity / styling. We do this **before** sending
+// the string through the Markdown engine so Markdown outside the thinking block
+// is still rendered, while the raw thinking text itself is escaped for safe
+// display.
+function transformThinkBlocks(rawText) {
+    // Use a non-greedy dotAll regex so multiple blocks are handled.
+    return rawText.replace(/<think>([\s\S]*?)<\/think>/g, (_, inner) => {
+        const safeInner = escapeHTML(inner);
+        // The inner text will be hidden by default (display: none) – clicking
+        // the indicator will toggle it (see processThinkBlocks).
+        return `\n<div class="bot-think"><div class="thinking-indicator">AI is thinking...</div><div class="think-content" style="display:none;">${safeInner}</div></div>\n`;
+    });
+}
+
+function processThinkBlocks(container) {
+    if (!container) return;
+    container.querySelectorAll('.bot-think').forEach(block => {
+        const indicator = block.querySelector('.thinking-indicator');
+        const content = block.querySelector('.think-content');
+        if (!indicator || !content) return;
+        indicator.addEventListener('click', () => {
+            if (content.style.display === 'none' || content.style.display === '') {
+                content.style.display = 'block';
+                indicator.textContent = 'Hide thinking';
+            } else {
+                content.style.display = 'none';
+                indicator.textContent = 'AI is thinking...';
+            }
+        });
+    });
 }
