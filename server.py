@@ -938,20 +938,23 @@ async def chat_completion(
                         """Serialise *obj* (mapping, pydantic model, etc.) to NDJSON."""
 
                         if isinstance(obj, dict):
-                            if "choices" not in obj and "message" in obj:
-                                try:
-                                    obj = _wrap_in_openai_chat_completion(
-                                        obj,
-                                        getattr(selected_interface, "model", "ollama"),  # type: ignore[name-defined, attr-defined]
-                                    )
-                                except Exception as _exc:
-                                    logger.debug("Streaming normalisation failed: %s", _exc)
+                            if chat_req.tools:  # Only wrap for tool-call mode
+                                if "choices" not in obj and "message" in obj:
+                                    try:
+                                        obj = _wrap_in_openai_chat_completion(
+                                            obj,
+                                            getattr(selected_interface, "model", "ollama"),  # type: ignore[name-defined, attr-defined]
+                                        )
+                                    except Exception as _exc:
+                                        logger.debug("Streaming normalisation failed: %s", _exc)
 
-                            # Ensure each tool_call conforms.
-                            try:
-                                _ensure_tool_calls_normalised(obj)
-                            except Exception as _exc:
-                                logger.debug("Tool-call normalisation (stream) failed: %s", _exc)
+                                # Ensure each tool_call conforms when tools in use
+                                try:
+                                    _ensure_tool_calls_normalised(obj)
+                                except Exception as _exc:
+                                    logger.debug(
+                                        "Tool-call normalisation (stream) failed: %s", _exc
+                                    )
                         elif not isinstance(obj, (dict, list, str, int, float, bool, type(None))):
                             # Attempt Pydantic model conversion.
                             if hasattr(obj, "model_dump") and callable(obj.model_dump):  # type: ignore[attr-defined]
@@ -1194,23 +1197,27 @@ async def chat_completion(
 
                     # Most common case – obj is already a mapping.
                     if isinstance(obj, dict):
-                        # If this looks like an Ollama response (has 'message'
-                        # but no 'choices') convert it to OpenAI spec so the
-                        # client side remains consistent.
-                        if "choices" not in obj and "message" in obj:
-                            try:
-                                obj = _wrap_in_openai_chat_completion(
-                                    obj,
-                                    getattr(selected_interface, "model", "ollama"),  # type: ignore[name-defined, attr-defined]
-                                )
-                            except Exception as _exc:
-                                logger.debug("Normalisation to OpenAI spec failed: %s", _exc)
+                        if chat_req.tools:
+                            # Only wrap/normalise in tool-call sessions.
+                            if "choices" not in obj and "message" in obj:
+                                try:
+                                    obj = _wrap_in_openai_chat_completion(
+                                        obj,
+                                        getattr(
+                                            selected_interface, "model", "ollama"
+                                        ),  # type: ignore[name-defined, attr-defined]
+                                    )
+                                except Exception as _exc:
+                                    logger.debug(
+                                        "Normalisation to OpenAI spec failed: %s", _exc
+                                    )
 
-                        # Normalise any tool_calls regardless of provider.
-                        try:
-                            _ensure_tool_calls_normalised(obj)
-                        except Exception as _exc:
-                            logger.debug("Tool-call normalisation failed: %s", _exc)
+                            try:
+                                _ensure_tool_calls_normalised(obj)
+                            except Exception as _exc:
+                                logger.debug(
+                                    "Tool-call normalisation failed: %s", _exc
+                                )
 
                         return obj
 
