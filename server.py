@@ -352,7 +352,7 @@ async def shared_get_version():
     Returns the current version of the application.
     """
     logger.info("Version endpoint called")
-    return JSONResponse(status_code=200, content={"version": "25.18.1"})
+    return JSONResponse(status_code=200, content={"version": "25.27.2"})
 
 # -----------------------
 # Authentication Endpoints
@@ -783,8 +783,26 @@ async def chat_completion(
                     logger.info("Starting streaming response")
 
                     # Helper to serialise a dictionary as NDJSON bytes.
-                    def _json_bytes(obj: Dict[str, Any]) -> bytes:  # type: ignore[type-var]
-                        return (json.dumps(obj) + "\n").encode("utf-8")
+                    def _json_bytes(obj: Any) -> bytes:  # type: ignore[override]
+                        """Serialise *obj* (mapping, pydantic model, etc.) to NDJSON."""
+
+                        if not isinstance(obj, (dict, list, str, int, float, bool, type(None))):
+                            # Attempt Pydantic model conversion.
+                            if hasattr(obj, "model_dump") and callable(obj.model_dump):  # type: ignore[attr-defined]
+                                try:
+                                    obj = obj.model_dump()
+                                except Exception:
+                                    pass
+                            elif hasattr(obj, "dict") and callable(obj.dict):  # type: ignore[attr-defined]
+                                try:
+                                    obj = obj.dict()
+                                except Exception:
+                                    pass
+                            else:
+                                # Fallback to string
+                                obj = str(obj)
+
+                        return (json.dumps(obj, default=str) + "\n").encode("utf-8")
 
                     # Firstly yield the first chunk that we already pulled above.
                     if chat_req.tools:
@@ -808,7 +826,24 @@ async def chat_completion(
                                 # Forward full chunk to client.
                                 yield _json_bytes(chunk)
                             else:
-                                content_from_chunk = selected_interface.extract_content_from_chunk(chunk)  # type: ignore
+                                # Ensure dict for content extraction.
+                                if isinstance(chunk, dict):
+                                    chunk_dict = chunk
+                                elif hasattr(chunk, "model_dump") and callable(chunk.model_dump):  # type: ignore[attr-defined]
+                                    try:
+                                        chunk_dict = chunk.model_dump()
+                                    except Exception:
+                                        chunk_dict = {}
+                                elif hasattr(chunk, "dict") and callable(chunk.dict):  # type: ignore[attr-defined]
+                                    try:
+                                        chunk_dict = chunk.dict()
+                                    except Exception:
+                                        chunk_dict = {}
+                                else:
+                                    chunk_dict = {}
+                                content_from_chunk = selected_interface.extract_content_from_chunk(  # type: ignore
+                                    chunk_dict
+                                )
                                 if content_from_chunk:
                                     full_response_chunks.append(content_from_chunk)
                                     yield _json_bytes({"message": content_from_chunk})
@@ -898,8 +933,25 @@ async def chat_completion(
                             )
                             break
                         else:
+                            # Ensure dict for content extraction.
+                            if not isinstance(response_data, dict):
+                                if hasattr(response_data, "model_dump") and callable(response_data.model_dump):  # type: ignore[attr-defined]
+                                    try:
+                                        response_data_dict = response_data.model_dump()
+                                    except Exception:
+                                        response_data_dict = {}
+                                elif hasattr(response_data, "dict") and callable(response_data.dict):  # type: ignore[attr-defined]
+                                    try:
+                                        response_data_dict = response_data.dict()
+                                    except Exception:
+                                        response_data_dict = {}
+                                else:
+                                    response_data_dict = {}
+                            else:
+                                response_data_dict = response_data
+
                             extracted_content = interface.extract_content_from_response(
-                                response_data, is_chat=True
+                                response_data_dict, is_chat=True
                             )
 
                             if extracted_content is not None:
@@ -954,9 +1006,43 @@ async def chat_completion(
                     background_tasks.add_task(save_non_streamed_response_task)
                     logger.info(f"Registered background task to save non-streaming response for {conversation_id}")
 
+                # Ensure the response is JSON serialisable.  The OpenAI
+                # interface already returns plain dictionaries but the Ollama
+                # python client returns a *ChatResponse* pydantic model which
+                # is **not** directly serialisable by FastAPI/JSONResponse.
+
+                def _to_jsonable(obj: Any):  # type: ignore[override]
+                    """Best-effort conversion of various response types into plain dicts."""
+
+                    if obj is None:
+                        return None
+
+                    # Most common case – obj is already a mapping.
+                    if isinstance(obj, dict):
+                        return obj
+
+                    # Pydantic v2 models (like ollama.ChatResponse) expose
+                    # `.model_dump()`.
+                    if hasattr(obj, "model_dump") and callable(obj.model_dump):  # type: ignore[attr-defined]
+                        try:
+                            return obj.model_dump()
+                        except Exception:
+                            pass
+
+                    # Pydantic v1 models use `.dict()`.
+                    if hasattr(obj, "dict") and callable(obj.dict):  # type: ignore[attr-defined]
+                        try:
+                            return obj.dict()
+                        except Exception:
+                            pass
+
+                    # Fallback – attempt to use __dict__ or last-resort string.
+                    return getattr(obj, "__dict__", str(obj))
+
                 if chat_req.tools:
+                    serialisable_payload = _to_jsonable(raw_response_obj)
                     return JSONResponse(
-                        raw_response_obj,
+                        serialisable_payload,  # type: ignore[arg-type]
                         headers={"X-Conversation-ID": conversation_id} if conversation_id else {},
                     )
                 else:
