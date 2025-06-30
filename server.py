@@ -60,8 +60,7 @@ async def _maybe_log_provider_payload(app: FastAPI, *, model_name: str, payload_
 
     flag = await get_value(app, "logging.full_provider_payload")
     if flag is None:
-        # default = True
-        flag = True
+        flag = True  # Default ON
 
     if not flag:
         return
@@ -76,9 +75,10 @@ async def _maybe_log_provider_payload(app: FastAPI, *, model_name: str, payload_
     except Exception:
         serialised = str(obj)
 
-    logging.getLogger("provider_payload").debug(
-        "[%s] %s: %s", model_name, payload_label, serialised[:10000]  # limit to 10k chars
-    )
+    plogger = logging.getLogger("provider_payload")
+    if plogger.level > logging.INFO:
+        plogger.setLevel(logging.INFO)
+    plogger.info("[%s] %s: %s", model_name, payload_label, serialised[:10000])
 
 # Configure logging
 logging.basicConfig(
