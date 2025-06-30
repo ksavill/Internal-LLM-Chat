@@ -3,6 +3,9 @@ import json
 import logging
 import asyncio
 import signal
+import time
+import uuid
+import copy
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Union, AsyncGenerator, Dict, Any # Added Dict, Any
 from contextlib import asynccontextmanager
@@ -45,6 +48,79 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# ------------------------------------------------------------
+# Utility: normalise Ollama style tool-call responses to OpenAI spec
+# ------------------------------------------------------------
+
+
+def _normalise_tool_calls(tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:  # type: ignore[type-var]
+    """Ensure each tool call dict follows the OpenAI Chat Completions schema.
+
+    * Adds a unique ``id`` if missing.
+    * Adds constant ``type: 'function'`` if missing.
+    * Converts ``function.arguments`` to a JSON *string* when provided as an
+      object/dict.
+    """
+
+    import json as _json
+
+    transformed: List[Dict[str, Any]] = []
+
+    for idx, tc in enumerate(tool_calls):
+        tc_new = copy.deepcopy(tc)
+
+        # id
+        if "id" not in tc_new or not isinstance(tc_new["id"], str):
+            tc_new["id"] = f"call_{idx}_{uuid.uuid4().hex[:8]}"
+
+        # type
+        if tc_new.get("type") != "function":
+            tc_new["type"] = "function"
+
+        # function.arguments stringification
+        func = tc_new.get("function")
+        if isinstance(func, dict):
+            args_val = func.get("arguments")
+            if not isinstance(args_val, str):
+                try:
+                    func["arguments"] = _json.dumps(args_val or {}, separators=(",", ":"))
+                except Exception:
+                    func["arguments"] = "{}"
+
+        transformed.append(tc_new)
+
+    return transformed
+
+
+def _wrap_in_openai_chat_completion(resp_dict: Dict[str, Any], model_name: str) -> Dict[str, Any]:  # type: ignore[type-var]
+    """Given an Ollama style response, produce an OpenAI-compatible one."""
+
+    message = resp_dict.get("message", {})
+
+    # Normalise tool_calls if present.
+    if "tool_calls" in message and isinstance(message["tool_calls"], list):
+        message["tool_calls"] = _normalise_tool_calls(message["tool_calls"])
+
+    choice_block = {
+        "index": 0,
+        "message": message,
+        "finish_reason": "stop" if resp_dict.get("done", False) else None,
+    }
+
+    openai_resp = {
+        "id": f"chatcmpl-{uuid.uuid4().hex}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": resp_dict.get("model", model_name),
+        "choices": [choice_block],
+    }
+
+    # Pass through usage block if provided in original response.
+    if "usage" in resp_dict:
+        openai_resp["usage"] = resp_dict["usage"]
+
+    return openai_resp
 
 # -----------------------
 # Database Connection Pool
@@ -786,7 +862,13 @@ async def chat_completion(
                     def _json_bytes(obj: Any) -> bytes:  # type: ignore[override]
                         """Serialise *obj* (mapping, pydantic model, etc.) to NDJSON."""
 
-                        if not isinstance(obj, (dict, list, str, int, float, bool, type(None))):
+                        if isinstance(obj, dict):
+                            if "choices" not in obj and "message" in obj:
+                                try:
+                                    obj = _wrap_in_openai_chat_completion(obj, getattr(selected_interface, "model", "ollama"))  # type: ignore[name-defined, attr-defined]
+                                except Exception as _exc:
+                                    logger.debug("Streaming normalisation failed: %s", _exc)
+                        elif not isinstance(obj, (dict, list, str, int, float, bool, type(None))):
                             # Attempt Pydantic model conversion.
                             if hasattr(obj, "model_dump") and callable(obj.model_dump):  # type: ignore[attr-defined]
                                 try:
@@ -1019,6 +1101,14 @@ async def chat_completion(
 
                     # Most common case – obj is already a mapping.
                     if isinstance(obj, dict):
+                        # If this looks like an Ollama response (has 'message'
+                        # but no 'choices') convert it to OpenAI spec so the
+                        # client side remains consistent.
+                        if "choices" not in obj and "message" in obj:
+                            try:
+                                obj = _wrap_in_openai_chat_completion(obj, getattr(selected_interface, "model", "ollama"))  # type: ignore[name-defined, attr-defined]
+                            except Exception as _exc:
+                                logger.debug("Normalisation to OpenAI spec failed: %s", _exc)
                         return obj
 
                     # Pydantic v2 models (like ollama.ChatResponse) expose
