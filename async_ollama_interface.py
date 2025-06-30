@@ -68,10 +68,12 @@ def _reformat_messages_for_ollama(messages_openai_format: List[Dict[str, Any]]) 
                         if isinstance(args_val, str):
                             try:
                                 func["arguments"] = _json.loads(args_val)
+                                logger.debug(
+                                    "Converted tool_call arguments string to dict for function '%s'",
+                                    func.get("name"),
+                                )
                             except Exception:
-                                # If parsing fails leave as original string –
-                                # Ollama will raise a clear error and caller
-                                # can examine.
+                                # If parsing fails leave as original string – ollama will later raise a clear error.
                                 pass
         except Exception as _exc:
             logger.debug("Failed to normalise tool_call arguments for Ollama: %s", _exc)

@@ -42,6 +42,44 @@ from models import (
     ForkRequest, ForkResponse
 )
 
+# -----------------------------------------------
+# Helper for optional verbose provider logging
+# -----------------------------------------------
+
+async def _maybe_log_provider_payload(app: FastAPI, *, model_name: str, payload_label: str, obj: Any):  # type: ignore[type-var]
+    """If enabled via config `logging.full_provider_payload` (default True) emit
+    the full provider request/response object at DEBUG level.  This makes
+    troubleshooting schema issues much easier without polluting logs in
+    production when disabled.
+    """
+
+    try:
+        from config import get_value
+    except ImportError:
+        return  # Should not happen
+
+    flag = await get_value(app, "logging.full_provider_payload")
+    if flag is None:
+        # default = True
+        flag = True
+
+    if not flag:
+        return
+
+    try:
+        import json as _json
+        serialised = (
+            _json.dumps(obj, indent=None, default=str)  # type: ignore[arg-type]
+            if not isinstance(obj, str)
+            else obj
+        )
+    except Exception:
+        serialised = str(obj)
+
+    logging.getLogger("provider_payload").debug(
+        "[%s] %s: %s", model_name, payload_label, serialised[:10000]  # limit to 10k chars
+    )
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -802,6 +840,14 @@ async def chat_completion(
         # Transform into OpenAI's multimodal format
         openai_formatted_history = _to_openai_multimodal_format(raw_history_dicts)
 
+        # Optional debug logging of the exact history we will send to the provider.
+        await _maybe_log_provider_payload(
+            request.app,
+            model_name="input",
+            payload_label="formatted_history",
+            obj=openai_formatted_history,
+        )
+
         if isinstance(chat_req.backup_models, str):
             backup_models = [chat_req.backup_models]
         else:
@@ -838,7 +884,15 @@ async def chat_completion(
                         logger.info(f"Attempting streaming with model: {model_name_to_try}")
                         # Pass openai_formatted_history to the interface
                         gen = interface.send_chat_streaming(openai_formatted_history, **local_kwargs)
-                        first_chunk = await gen.__anext__() # Check first chunk for errors
+                        first_chunk = await gen.__anext__()  # Check first chunk for errors
+
+                        # Optional verbose logging of the raw provider chunk
+                        await _maybe_log_provider_payload(
+                            request.app,
+                            model_name=model_name_to_try,
+                            payload_label="stream_first_chunk",
+                            obj=first_chunk,
+                        )
                         logger.debug(f"First streaming chunk from {model_name_to_try}: {first_chunk}")
                         
                         # Error checking for the first chunk (adapt to your interface's error reporting)
@@ -1027,7 +1081,16 @@ async def chat_completion(
                     try:
                         logger.info(f"Attempting non-streaming with model: {model_name_to_try}")
                         # Pass openai_formatted_history to the interface
-                        response_data = await interface.send_chat_nonstreaming(openai_formatted_history, **local_kwargs)
+                        response_data = await interface.send_chat_nonstreaming(
+                            openai_formatted_history, **local_kwargs
+                        )
+
+                        await _maybe_log_provider_payload(
+                            request.app,
+                            model_name=model_name_to_try,
+                            payload_label="nonstream_response",
+                            obj=response_data,
+                        )
                         
                         # Error checking (adapt to your interface's error reporting)
                         if isinstance(response_data, dict) and "error" in response_data:
