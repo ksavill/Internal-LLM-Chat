@@ -122,6 +122,27 @@ def _wrap_in_openai_chat_completion(resp_dict: Dict[str, Any], model_name: str) 
 
     return openai_resp
 
+
+def _ensure_tool_calls_normalised(obj: Dict[str, Any]) -> None:  # type: ignore[type-var]
+    """Walk *obj* and normalise any tool_calls lists in-place."""
+
+    # Top-level message pattern (Ollama style already handled).
+    if "message" in obj and isinstance(obj["message"], dict):
+        msg = obj["message"]
+        if "tool_calls" in msg and isinstance(msg["tool_calls"], list):
+            msg["tool_calls"] = _normalise_tool_calls(msg["tool_calls"])
+
+    # OpenAI envelope – iterate choices.
+    if "choices" in obj and isinstance(obj["choices"], list):
+        for ch in obj["choices"]:
+            if not isinstance(ch, dict):
+                continue
+            delta_or_msg = ch.get("message") or ch.get("delta")
+            if isinstance(delta_or_msg, dict) and "tool_calls" in delta_or_msg:
+                tc = delta_or_msg["tool_calls"]
+                if isinstance(tc, list):
+                    delta_or_msg["tool_calls"] = _normalise_tool_calls(tc)
+
 # -----------------------
 # Database Connection Pool
 # -----------------------
@@ -865,9 +886,18 @@ async def chat_completion(
                         if isinstance(obj, dict):
                             if "choices" not in obj and "message" in obj:
                                 try:
-                                    obj = _wrap_in_openai_chat_completion(obj, getattr(selected_interface, "model", "ollama"))  # type: ignore[name-defined, attr-defined]
+                                    obj = _wrap_in_openai_chat_completion(
+                                        obj,
+                                        getattr(selected_interface, "model", "ollama"),  # type: ignore[name-defined, attr-defined]
+                                    )
                                 except Exception as _exc:
                                     logger.debug("Streaming normalisation failed: %s", _exc)
+
+                            # Ensure each tool_call conforms.
+                            try:
+                                _ensure_tool_calls_normalised(obj)
+                            except Exception as _exc:
+                                logger.debug("Tool-call normalisation (stream) failed: %s", _exc)
                         elif not isinstance(obj, (dict, list, str, int, float, bool, type(None))):
                             # Attempt Pydantic model conversion.
                             if hasattr(obj, "model_dump") and callable(obj.model_dump):  # type: ignore[attr-defined]
@@ -1106,23 +1136,43 @@ async def chat_completion(
                         # client side remains consistent.
                         if "choices" not in obj and "message" in obj:
                             try:
-                                obj = _wrap_in_openai_chat_completion(obj, getattr(selected_interface, "model", "ollama"))  # type: ignore[name-defined, attr-defined]
+                                obj = _wrap_in_openai_chat_completion(
+                                    obj,
+                                    getattr(selected_interface, "model", "ollama"),  # type: ignore[name-defined, attr-defined]
+                                )
                             except Exception as _exc:
                                 logger.debug("Normalisation to OpenAI spec failed: %s", _exc)
+
+                        # Normalise any tool_calls regardless of provider.
+                        try:
+                            _ensure_tool_calls_normalised(obj)
+                        except Exception as _exc:
+                            logger.debug("Tool-call normalisation failed: %s", _exc)
+
                         return obj
 
                     # Pydantic v2 models (like ollama.ChatResponse) expose
                     # `.model_dump()`.
                     if hasattr(obj, "model_dump") and callable(obj.model_dump):  # type: ignore[attr-defined]
                         try:
-                            return obj.model_dump()
+                            converted = obj.model_dump()
+                            try:
+                                _ensure_tool_calls_normalised(converted)
+                            except Exception:
+                                pass
+                            return converted
                         except Exception:
                             pass
 
                     # Pydantic v1 models use `.dict()`.
                     if hasattr(obj, "dict") and callable(obj.dict):  # type: ignore[attr-defined]
                         try:
-                            return obj.dict()
+                            converted = obj.dict()
+                            try:
+                                _ensure_tool_calls_normalised(converted)
+                            except Exception:
+                                pass
+                            return converted
                         except Exception:
                             pass
 
