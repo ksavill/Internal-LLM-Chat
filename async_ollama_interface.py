@@ -309,8 +309,10 @@ class AsyncOllamaInterface:
                 "messages": ollama_formatted_messages,
                 "stream": True,
             }
+
             if ollama_options:
                 chat_kwargs["options"] = ollama_options
+
             if system_prompt_arg:
                 chat_kwargs["system"] = system_prompt_arg
 
@@ -319,7 +321,22 @@ class AsyncOllamaInterface:
                 if k not in {"options", "timeout_threshold"}:
                     chat_kwargs[k] = v
 
-            stream_generator = await self.client.chat(**chat_kwargs)
+            try:
+                stream_generator = await self.client.chat(**chat_kwargs)
+            except TypeError as exc:
+                # Fallback for older ollama-python that doesn't accept the system param.
+                if (
+                    system_prompt_arg
+                    and "unexpected keyword argument 'system'" in str(exc)
+                ):
+                    logger.debug("'system' param unsupported, falling back to message prepend (streaming)")
+                    chat_kwargs.pop("system", None)
+                    chat_kwargs["messages"] = [
+                        {"role": "system", "content": system_prompt_arg}
+                    ] + chat_kwargs["messages"]
+                    stream_generator = await self.client.chat(**chat_kwargs)
+                else:
+                    raise
             logger.debug(f"[Ollama] Obtained streaming generator for model: {self.model}")
             async for chunk in stream_generator:
                 # logger.debug(f"[Ollama] Received streaming chunk: {chunk}") # Very verbose
@@ -372,8 +389,10 @@ class AsyncOllamaInterface:
                 "messages": ollama_formatted_messages,
                 "stream": False,
             }
+
             if ollama_options:
                 chat_kwargs["options"] = ollama_options
+
             if system_prompt_arg:
                 chat_kwargs["system"] = system_prompt_arg
 
@@ -381,7 +400,21 @@ class AsyncOllamaInterface:
                 if k not in {"options", "timeout_threshold"}:
                     chat_kwargs[k] = v
 
-            response = await self.client.chat(**chat_kwargs)
+            try:
+                response = await self.client.chat(**chat_kwargs)
+            except TypeError as exc:
+                if (
+                    system_prompt_arg
+                    and "unexpected keyword argument 'system'" in str(exc)
+                ):
+                    logger.debug("'system' param unsupported, falling back to message prepend (non-streaming)")
+                    chat_kwargs.pop("system", None)
+                    chat_kwargs["messages"] = [
+                        {"role": "system", "content": system_prompt_arg}
+                    ] + chat_kwargs["messages"]
+                    response = await self.client.chat(**chat_kwargs)
+                else:
+                    raise
             logger.debug(f"[Ollama] Received non-streaming response: {response}")
             return response
         except ollama.ResponseError as e:
