@@ -4,6 +4,6 @@
         "fine_tuned_models_allowed": false
     },
     "ollama": {
-        "embed_system_prompt_inline": false
+        "embed_system_prompt_inline": true
     }
 }
