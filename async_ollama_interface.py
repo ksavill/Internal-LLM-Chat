@@ -168,15 +168,25 @@ def _reformat_messages_for_ollama(messages_openai_format: List[Dict[str, Any]]) 
     # ------------------------------------------------------------
 
     if system_prompt_text:
+        logger.info(
+            "[OllamaFormatter] Captured system prompt (len=%d). Injecting into first user message.",
+            len(system_prompt_text),
+        )
+
         for rm in reformatted_messages:
             if rm.get("role") == "user":
                 original_content = rm.get("content", "") or ""
                 if not isinstance(original_content, str):
-                    # Non-string (unexpected) – stringify.
                     original_content = str(original_content)
+
                 rm["content"] = (
                     f"<system_prompt>{system_prompt_text}</system_prompt>\n\n{original_content}"
                 ).strip()
+
+                logger.info(
+                    "[OllamaFormatter] First user message content after injection: %.100s",
+                    rm["content"],
+                )
                 break  # Only modify the first user message.
 
     return reformatted_messages
