@@ -1,7 +1,10 @@
 # async_ollama_interface.py
 import ollama
 from ollama import AsyncClient # Explicit import for clarity
-from typing import List, Dict, Any, AsyncGenerator, Optional
+from typing import List, Dict, Any, AsyncGenerator, Optional, Tuple
+
+from copy import deepcopy
+
 import logging
 import traceback
 
@@ -134,6 +137,53 @@ def _reformat_messages_for_ollama(messages_openai_format: List[Dict[str, Any]]) 
 
     return reformatted_messages
 
+# ------------------------------------------------------------
+# Helper: Extract and remove a system prompt from conversation
+# ------------------------------------------------------------
+
+def _pop_system_prompt(
+    messages: List[Dict[str, Any]]
+) -> Tuple[Optional[str], List[Dict[str, Any]]]:
+    """Return *(system_prompt, messages_without_system)*.
+
+    The function searches for the **first** message whose ``role`` equals
+    ``"system"`` (case-sensitive to match the ChatML spec).  If found, that
+    message's *content* string is returned as the *system_prompt* and the
+    message is **removed** from the list that will ultimately be forwarded to
+    Ollama.  If there is no such message, ``system_prompt`` is ``None`` and
+    the input list is passed through unchanged.
+
+    A *shallow* copy of each message dict is used so that the caller's
+    original data is left untouched.
+    """
+
+    system_prompt: Optional[str] = None
+    remaining: List[Dict[str, Any]] = []
+
+    for msg in messages:
+        if system_prompt is None and msg.get("role") == "system":
+            # Capture the first system prompt we encounter.
+            # Guard against non-string content just in case.
+            content_val = msg.get("content")
+            if isinstance(content_val, str):
+                system_prompt = content_val
+            else:
+                try:
+                    # Attempt best-effort serialisation for e.g. multimodal
+                    # system prompts (rare).
+                    import json as _json
+                    system_prompt = _json.dumps(content_val, default=str)
+                except Exception:
+                    system_prompt = str(content_val)
+            # Skip adding this message to remaining list (i.e. remove it).
+            continue
+
+        # Keep all other messages.
+        remaining.append(deepcopy(msg))
+
+    return system_prompt, remaining
+
+
 
 class AsyncOllamaInterface:
     def __init__(self, model: str, client: Optional[AsyncClient] = None): # Added Optional type hint
@@ -226,9 +276,20 @@ class AsyncOllamaInterface:
             return
 
         ollama_formatted_messages = _reformat_messages_for_ollama(messages_openai_format)
-        
-        logger.debug(f"[Ollama] Initiating streaming chat for model: {self.model}")
-        # logger.debug(f"[Ollama] Original OpenAI format messages: {messages_openai_format}") # Very verbose
+
+        # Extract a system prompt (if present) and remove it from the message
+        # list.  This provides compatibility with older Ollama releases that
+        # ignore system-role messages but honour the explicit *system*
+        # parameter.  For newer versions this is also harmless – they will
+        # apply the prompt once and we avoid sending a duplicate.
+
+        system_prompt_arg, ollama_formatted_messages = _pop_system_prompt(ollama_formatted_messages)
+
+        logger.debug(
+            "[Ollama] Initiating streaming chat for model: %s (system_prompt=%s)",
+            self.model,
+            (system_prompt_arg[:60] + "…") if system_prompt_arg else None,
+        )
         logger.debug(f"[Ollama] Reformatted Ollama messages: {ollama_formatted_messages}")
 
         # The ollama library's AsyncClient.chat itself doesn't take a direct timeout_threshold.
@@ -243,15 +304,22 @@ class AsyncOllamaInterface:
         # if timeout_threshold: ollama_options['request_timeout'] = timeout_threshold # Check ollama lib for exact option name if needed
 
         try:
-            stream_generator = await self.client.chat(
-                model=self.model,
-                messages=ollama_formatted_messages,
-                stream=True,
-                options=ollama_options if ollama_options else None,  # Pass options if they exist
-                # Other kwargs can be passed if self.client.chat supports them directly
-                # e.g., format, keep_alive, etc. are valid top-level params for client.chat
-                **{k: v for k, v in kwargs.items() if k not in ["options", "timeout_threshold"]} 
-            )
+            chat_kwargs = {
+                "model": self.model,
+                "messages": ollama_formatted_messages,
+                "stream": True,
+            }
+            if ollama_options:
+                chat_kwargs["options"] = ollama_options
+            if system_prompt_arg:
+                chat_kwargs["system"] = system_prompt_arg
+
+            # Forward any additional kwargs except those already handled.
+            for k, v in kwargs.items():
+                if k not in {"options", "timeout_threshold"}:
+                    chat_kwargs[k] = v
+
+            stream_generator = await self.client.chat(**chat_kwargs)
             logger.debug(f"[Ollama] Obtained streaming generator for model: {self.model}")
             async for chunk in stream_generator:
                 # logger.debug(f"[Ollama] Received streaming chunk: {chunk}") # Very verbose
@@ -283,20 +351,37 @@ class AsyncOllamaInterface:
 
         ollama_formatted_messages = _reformat_messages_for_ollama(messages_openai_format)
 
-        logger.debug(f"[Ollama] Initiating non-streaming chat for model: {self.model}")
+        # Extract optional system prompt and strip from message history.
+        system_prompt_arg, ollama_formatted_messages = _pop_system_prompt(
+            ollama_formatted_messages
+        )
+
+        logger.debug(
+            "[Ollama] Initiating non-streaming chat for model: %s (system_prompt=%s)",
+            self.model,
+            (system_prompt_arg[:60] + "…") if system_prompt_arg else None,
+        )
         logger.debug(f"[Ollama] Reformatted Ollama messages: {ollama_formatted_messages}")
 
         ollama_options = kwargs.get("options", {})
         # if timeout_threshold: ollama_options['request_timeout'] = timeout_threshold
 
         try:
-            response = await self.client.chat(
-                model=self.model,
-                messages=ollama_formatted_messages,
-                stream=False,
-                options=ollama_options if ollama_options else None,
-                **{k: v for k, v in kwargs.items() if k not in ["options", "timeout_threshold"]}
-            )
+            chat_kwargs = {
+                "model": self.model,
+                "messages": ollama_formatted_messages,
+                "stream": False,
+            }
+            if ollama_options:
+                chat_kwargs["options"] = ollama_options
+            if system_prompt_arg:
+                chat_kwargs["system"] = system_prompt_arg
+
+            for k, v in kwargs.items():
+                if k not in {"options", "timeout_threshold"}:
+                    chat_kwargs[k] = v
+
+            response = await self.client.chat(**chat_kwargs)
             logger.debug(f"[Ollama] Received non-streaming response: {response}")
             return response
         except ollama.ResponseError as e:
