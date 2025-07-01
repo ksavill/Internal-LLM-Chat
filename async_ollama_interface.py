@@ -3,8 +3,12 @@ import ollama
 from ollama import AsyncClient # Explicit import for clarity
 from typing import List, Dict, Any, AsyncGenerator, Optional, Tuple
 
+# stdlib imports
 from copy import deepcopy
+import json as _json
+import os
 
+# third-party / local
 import logging
 import traceback
 
@@ -12,6 +16,36 @@ logger = logging.getLogger(__name__)
 # Ensure logger level is set appropriately in your main application if it's not already
 # For debugging this module specifically, you can set it here:
 # logger.setLevel(logging.DEBUG) 
+
+# ------------------------------------------------------------------
+# Configuration helper: determines how to deliver system prompts to Ollama.
+# ------------------------------------------------------------------
+
+_CFG_PATH = os.getenv("LLM_CHAT_CONFIG_FILE", "config.json")
+
+
+def _read_config_value(path: str, default: Any = None):  # type: ignore[type-var]
+    """Return dotted *path* from JSON config, or *default* if missing."""
+
+    try:
+        with open(_CFG_PATH, "r", encoding="utf-8") as _fp:
+            data = _json.load(_fp)
+    except Exception:
+        return default
+
+    node: Any = data
+    for part in path.split("."):
+        if isinstance(node, dict) and part in node:
+            node = node[part]
+        else:
+            return default
+    return node
+
+
+def _should_embed_system_inline() -> bool:
+    """Look up ``ollama.embed_system_prompt_inline`` (default False)."""
+
+    return bool(_read_config_value("ollama.embed_system_prompt_inline", False))
 
 def _data_url_to_pure_base64(data_url: str) -> Optional[str]:
     """Converts a data URL (e.g., 'data:image/jpeg;base64,XXXX') to a pure base64 string ('XXXX')."""
@@ -32,49 +66,22 @@ def _data_url_to_pure_base64(data_url: str) -> Optional[str]:
         logger.error(f"Error processing data URL '{data_url[:60]}': {e}")
         return None
 
+# Restored to original behaviour: purely convert modal parts. System prompt
+# handling is performed elsewhere (send_chat_*).
+
 def _reformat_messages_for_ollama(messages_openai_format: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Transforms messages from OpenAI's multimodal format to Ollama's expected format.
-    OpenAI format example: 
-        [{'role': 'user', 'content': [{'type': 'text', 'text': 'Hi'}, {'type': 'image_url', 'image_url': {'url': 'data:...'}}]}]
-    Ollama format example: 
-        [{'role': 'user', 'content': 'Hi', 'images': ['base64_string1']}]
+    Transform OpenAI multimodal messages into Ollama's expected format.
+    - Converts array-style `content` with image_url parts into simple
+      `content` + `images` fields.
+    - Leaves all other keys untouched.
     """
+
     reformatted_messages: List[Dict[str, Any]] = []
 
-    # ------------------------------------------------------------
-    # Pass 1 – identify and remove an explicit system prompt.
-    # ------------------------------------------------------------
-
-    system_prompt_text: Optional[str] = None
-
-    # We iterate through *copy* so we can modify the original list (pop system
-    # prompt) safely.
-    remaining_messages_iter = []
-    for msg in messages_openai_format:
-        if system_prompt_text is None and msg.get("role") == "system":
-            content_val = msg.get("content")
-            if isinstance(content_val, str):
-                system_prompt_text = content_val.strip()
-            else:
-                # Best-effort serialisation for unusual types (e.g. list parts)
-                try:
-                    import json as _json
-                    system_prompt_text = _json.dumps(content_val, default=str)
-                except Exception:
-                    system_prompt_text = str(content_val)
-            # Do NOT include this message – effectively removing it.
-            continue
-
-        remaining_messages_iter.append(msg)
-
-    # Now iterate over remaining messages to build the target list.
-
-    for msg_openai in remaining_messages_iter:
-        # Start with a *shallow copy* so that any additional keys (e.g.
-        # `name`, `tool_call_id`, `tool_calls`, etc.) survive the
-        # transformation untouched.
-        ollama_msg: Dict[str, Any] = dict(msg_openai)  # shallow copy first
+    for msg_openai in messages_openai_format:
+        # Shallow copy so extra keys survive.
+        ollama_msg: Dict[str, Any] = dict(msg_openai)
 
         # ------------------------------------------------------------------
         # 1) Tool-call argument normalisation (OpenAI → Ollama)
@@ -162,32 +169,6 @@ def _reformat_messages_for_ollama(messages_openai_format: List[Dict[str, Any]]) 
         # Remove helper keys not used by Ollama.
 
         reformatted_messages.append(ollama_msg)
-
-    # ------------------------------------------------------------
-    # Embed the captured system prompt (if any) into the first user message.
-    # ------------------------------------------------------------
-
-    if system_prompt_text:
-        logger.info(
-            "[OllamaFormatter] Captured system prompt (len=%d). Injecting into first user message.",
-            len(system_prompt_text),
-        )
-
-        for rm in reformatted_messages:
-            if rm.get("role") == "user":
-                original_content = rm.get("content", "") or ""
-                if not isinstance(original_content, str):
-                    original_content = str(original_content)
-
-                rm["content"] = (
-                    f"<system_prompt>{system_prompt_text}</system_prompt>\n\n{original_content}"
-                ).strip()
-
-                logger.info(
-                    "[OllamaFormatter] First user message content after injection: %.100s",
-                    rm["content"],
-                )
-                break  # Only modify the first user message.
 
     return reformatted_messages
 
@@ -368,7 +349,20 @@ class AsyncOllamaInterface:
                 chat_kwargs["options"] = ollama_options
 
             if system_prompt_arg:
-                chat_kwargs["system"] = system_prompt_arg
+                if _should_embed_system_inline():
+                    # Inject into first user message.
+                    if chat_kwargs["messages"]:
+                        for m in chat_kwargs["messages"]:
+                            if m.get("role") == "user":
+                                orig = m.get("content", "") or ""
+                                if not isinstance(orig, str):
+                                    orig = str(orig)
+                                m["content"] = (
+                                    f"<system_prompt>{system_prompt_arg}</system_prompt>\n\n{orig}"
+                                ).strip()
+                                break
+                else:
+                    chat_kwargs["system"] = system_prompt_arg
 
             # Forward any additional kwargs except those already handled.
             for k, v in kwargs.items():
@@ -448,7 +442,19 @@ class AsyncOllamaInterface:
                 chat_kwargs["options"] = ollama_options
 
             if system_prompt_arg:
-                chat_kwargs["system"] = system_prompt_arg
+                if _should_embed_system_inline():
+                    if chat_kwargs["messages"]:
+                        for m in chat_kwargs["messages"]:
+                            if m.get("role") == "user":
+                                orig = m.get("content", "") or ""
+                                if not isinstance(orig, str):
+                                    orig = str(orig)
+                                m["content"] = (
+                                    f"<system_prompt>{system_prompt_arg}</system_prompt>\n\n{orig}"
+                                ).strip()
+                                break
+                else:
+                    chat_kwargs["system"] = system_prompt_arg
 
             for k, v in kwargs.items():
                 if k not in {"options", "timeout_threshold"}:

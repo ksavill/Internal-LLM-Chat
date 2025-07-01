@@ -2,5 +2,8 @@
     "openai": {
         "pro_models_allowed": true,
         "fine_tuned_models_allowed": false
+    },
+    "ollama": {
+        "embed_system_prompt_inline": false
     }
 }
