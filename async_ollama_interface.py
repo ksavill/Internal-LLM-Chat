@@ -42,7 +42,35 @@ def _reformat_messages_for_ollama(messages_openai_format: List[Dict[str, Any]]) 
     """
     reformatted_messages: List[Dict[str, Any]] = []
 
-    for msg_openai in messages_openai_format:
+    # ------------------------------------------------------------
+    # Pass 1 – identify and remove an explicit system prompt.
+    # ------------------------------------------------------------
+
+    system_prompt_text: Optional[str] = None
+
+    # We iterate through *copy* so we can modify the original list (pop system
+    # prompt) safely.
+    remaining_messages_iter = []
+    for msg in messages_openai_format:
+        if system_prompt_text is None and msg.get("role") == "system":
+            content_val = msg.get("content")
+            if isinstance(content_val, str):
+                system_prompt_text = content_val.strip()
+            else:
+                # Best-effort serialisation for unusual types (e.g. list parts)
+                try:
+                    import json as _json
+                    system_prompt_text = _json.dumps(content_val, default=str)
+                except Exception:
+                    system_prompt_text = str(content_val)
+            # Do NOT include this message – effectively removing it.
+            continue
+
+        remaining_messages_iter.append(msg)
+
+    # Now iterate over remaining messages to build the target list.
+
+    for msg_openai in remaining_messages_iter:
         # Start with a *shallow copy* so that any additional keys (e.g.
         # `name`, `tool_call_id`, `tool_calls`, etc.) survive the
         # transformation untouched.
@@ -134,6 +162,22 @@ def _reformat_messages_for_ollama(messages_openai_format: List[Dict[str, Any]]) 
         # Remove helper keys not used by Ollama.
 
         reformatted_messages.append(ollama_msg)
+
+    # ------------------------------------------------------------
+    # Embed the captured system prompt (if any) into the first user message.
+    # ------------------------------------------------------------
+
+    if system_prompt_text:
+        for rm in reformatted_messages:
+            if rm.get("role") == "user":
+                original_content = rm.get("content", "") or ""
+                if not isinstance(original_content, str):
+                    # Non-string (unexpected) – stringify.
+                    original_content = str(original_content)
+                rm["content"] = (
+                    f"<system_prompt>{system_prompt_text}</system_prompt>\n\n{original_content}"
+                ).strip()
+                break  # Only modify the first user message.
 
     return reformatted_messages
 
